@@ -30,7 +30,7 @@ const PAI_BADGES = {
 const FILHO_FLAGS = ["IndTribRegular", "IndPermiteCredPres", "IndEstornoCred"];
 
 // Versão dos assets para cache-busting (?v=). Bump a cada release de dados.
-const ASSET_V = "20261010g";
+const ASSET_V = "20261010h";
 const urlV = (p) => `${p}?v=${ASSET_V}`;
 
 let DATA = [];
