@@ -52,41 +52,71 @@ cst-cclasstrib/
 │   ├── anexos/                 # fragmentos por cClassTrib (Detalhe baixa só o fragmento, em KB)
 │   └── classificacao-tributaria.json  # snapshot completo, inclui anexos NCM/NBS (fallback do Detalhe)
 └── scripts/
-    ├── atualizar.py            # regenera os JSONs a partir da página oficial salva
-    ├── atualizar_descricoes.py # regenera ncm-descricoes.json a partir do tipi-data.js
+    ├── atualizar.py            # regenera os JSONs do portal (URL ou página salva), com os patches
     ├── atualizar_anexo8.py     # regenera anexo-viii.json a partir da planilha do Anexo VIII
+    ├── atualizar_descricoes.py # regenera ncm-descricoes.json a partir do tipi-data.js
+    ├── atualizar_tudo.py       # encadeia a atualização inteira e roda os testes
     ├── gerar_anexos.py         # fatia os anexos por cClassTrib em data/anexos/
-    ├── test_dados.py           # regressão: contagens, cruzamentos, fragmentos, ASSET_V
+    ├── patches.json            # anexos curados à mão que a fonte oficial não traz
+    ├── test_dados.py           # regressão: contagens, cruzamentos, fragmentos, patches, ASSET_V
     └── test_lote.mjs           # regressão: importação em lote de NCM → CSV/Excel
 ```
 
 ## Atualizar os dados
 
-A página oficial embute o dataset completo em JavaScript (`var dadosOriginais`), então a atualização é determinística:
+A página oficial embute o dataset completo em JavaScript (`var dadosOriginais`), então a atualização é determinística. Um comando faz o serviço:
 
 ```bash
-# 1. Abra a URL oficial no navegador e salve a página completa como portal.html
-# 2. Rode:
-python scripts/atualizar.py portal.html
-# 3. Confira e commite data/resumo.json + data/classificacao-tributaria.json
+python scripts/atualizar_tudo.py
 ```
 
-Descrições NCM (fonte: https://silvioalbqrq.github.io/consulta-ncm/tipi-data.js):
+O que ele encadeia:
+
+1. `scripts/atualizar.py` — baixa a URL oficial (ou usa uma página salva) e grava `data/classificacao-tributaria.json`, `data/resumo.json` e `data/ncm-nbs.json`;
+2. `scripts/gerar_anexos.py` — fatia os anexos em `data/anexos/<cClassTrib>.json`;
+3. `scripts/test_dados.py` — confere contagens e cruzamentos.
+
+Antes de commitar, `--check` mostra o que mudaria **sem gravar nada**:
 
 ```bash
-# 1. Baixe o tipi-data.js do site consulta-ncm
-# 2. Rode:
-python scripts/atualizar_descricoes.py tipi-data.js
-# 3. Confira e commite data/ncm-descricoes.json
+python scripts/atualizar_tudo.py --check
 ```
+
+O `atualizar.py` aceita a URL oficial ou um arquivo salvo no navegador (salve como "página completa", não "somente HTML"):
+
+```bash
+python scripts/atualizar.py              # baixa a URL oficial
+python scripts/atualizar.py portal.html  # usa a página salva (portal.html é ignorado pelo Git)
+python scripts/atualizar.py --check      # não grava: mostra o que mudaria
+```
+
+As outras duas fontes mudam em ritmo próprio, por isso ficam atrás de uma opção:
+
+```bash
+# Anexo VIII — planilha .xlsx (a versão sai do nome do arquivo, ex. V1.01.00)
+python scripts/atualizar_tudo.py --anexo8 "AnexoVIII-CorrelacaoItemNBSIndOpCClassTrib_IBSCBS_V1.01.00.xlsx"
+
+# Descrições NCM — tipi-data.js (baixa https://silvioalbqrq.github.io/consulta-ncm/tipi-data.js)
+python scripts/atualizar_tudo.py --descricoes
+```
+
+Cada script pode ser rodado sozinho (todos aceitam `--check`, e os de fonte aceitam URL ou arquivo local).
+
+### Curadoria: `scripts/patches.json`
+
+`data/classificacao-tributaria.json` **não é cópia fiel do portal**: ele traz anexos curados à mão que a fonte oficial não tem — hoje 384, em três cClassTrib (medicamentos do Anexo XIV revogado em `200032` e a Frutose `1702.50.00` em `200011`/`200033`). Esses anexos vivem em `scripts/patches.json` e o `atualizar.py` os reaplica a cada regeração.
+
+- Se a fonte (portal + patches) ficar **mais pobre** que o arquivo atual, o script **não grava nada** e lista o que seria perdido, cClassTrib por cClassTrib. Use `--force` só quando a perda for intencional.
+- Se `--sem-patches` for usado, a curadoria não é aplicada (e o `test_dados.py` acusa).
+- Entradas que a fonte já traga são ignoradas, e o script avisa quando um patch virou obsoleto.
+- **Mexeu no snapshot à mão? Registre o anexo em `scripts/patches.json`** (com `motivo` e `referencia`), senão a próxima atualização descarta a mudança. O `test_dados.py` falha se algum anexo curado sumir do snapshot.
 
 Anexo VIII — correlação NBS × IndOp × cClassTrib (planilha do Anexo VIII, V1.01.00):
 
 ```bash
-# 1. Salve a planilha do Anexo VIII (.xlsx)
-# 2. Rode:
 python scripts/atualizar_anexo8.py "AnexoVIII-CorrelacaoItemNBSIndOpCClassTrib_IBSCBS_V1.01.00.xlsx"
-# 3. Confira e commite data/anexo-viii.json
+# A versão sai do nome do arquivo; --versao V1.02.00 força outra.
+# --gerado-em preserva a data já publicada (a do rodapé do site) quando não informado.
 ```
 
 Notas do Anexo VIII:
@@ -99,7 +129,7 @@ Notas do Anexo VIII:
 Testes:
 
 ```bash
-python scripts/test_dados.py     # datasets: contagens, cruzamentos, fragmentos, ASSET_V
+python scripts/test_dados.py     # datasets: contagens, cruzamentos, fragmentos, patches, ASSET_V
 node scripts/test_lote.mjs       # importação em lote: leitura, resolução, CSV e .xlsx
 # CI (.github/workflows/ci.yml): node --check assets/app.js + os dois testes acima
 ```

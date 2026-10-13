@@ -24,6 +24,9 @@ import sys
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.path.join(REPO, "data")
 
+sys.path.insert(0, os.path.join(REPO, "scripts"))
+from atualizar import carregar_patches, conferir_patches  # noqa: E402
+
 ESPERADO = {
     "csts": 18,
     "cclasstrib_resumo": 173,
@@ -141,6 +144,31 @@ def main():
     print(f"{'OK  ' if ok else 'FAIL'} qtdAnexos x full: {len(diverg)} divergentes")
     if not ok:
         falhas.append("qtdanexos-x-full")
+
+    # Curadoria: os anexos de scripts/patches.json têm de estar no snapshot.
+    # O atualizar.py reaplica os patches a cada regeração; se algum sumir, é
+    # sinal de que os dados foram regerados sem eles (ou com --sem-patches).
+    # Sem o arquivo (projeto sem curadoria), não há o que conferir.
+    patches_path = os.path.join(REPO, "scripts", "patches.json")
+    if not os.path.isfile(patches_path):
+        print("--   patches curados: scripts/patches.json não existe (nada a conferir)")
+    else:
+        total_patch, faltando_patch, erro_patch = 0, [], None
+        try:
+            patches = carregar_patches(patches_path)
+            total_patch = sum(len(p.get("itens") or []) for p in patches)
+            faltando_patch = conferir_patches(full, patches)
+        except Exception as e:  # JSON quebrado, patch malformado
+            erro_patch = e
+        ok = erro_patch is None and not faltando_patch
+        print(f"{'OK  ' if ok else 'FAIL'} patches curados (scripts/patches.json): "
+              f"{total_patch} anexo(s), {len(faltando_patch)} faltando"
+              + (f" — {erro_patch}" if erro_patch else ""))
+        if not ok:
+            for cod, motivo in faltando_patch:
+                print(f"  {cod}: {motivo}")
+            print("  rode scripts/atualizar.py (sem --sem-patches) para reaplicar a curadoria")
+            falhas.append("patches-curados")
 
     # Fragmentos data/anexos/*.json (Detalhe baixa o fragmento, não o full)
     frags = glob.glob(os.path.join(DATA, "anexos", "*.json"))
