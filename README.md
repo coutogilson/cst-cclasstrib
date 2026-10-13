@@ -30,6 +30,7 @@ python -m http.server 8000
 - **Filtros** por CST, descrição, indicadores do CST, cClassTrib, tipo de alíquota, tributação regular / crédito presumido / estorno e DF-e aplicáveis (operador E/OU).
 - **Detalhe** por código: vigência, percentuais de redução, DF-e, regra IBS/CBS, link da legislação e itens de anexo (NCM/NBS, carregados sob demanda).
 - **Anexo VIII** — correlação Item LC 116 → NBS → PS Onerosa / Adq. Exterior / IndOp / Local de incidência → cClassTrib: seção própria de consulta, matriz de regra de incidência → IndOp, caixa de correlações na busca de NBS (9 dígitos) e no detalhe do cClassTrib.
+- **Importação em lote de NCM** — cole uma lista de NCMs ou abra um arquivo CSV/TXT e receba a tabela cClassTrib de cada código: `NCM consultado · CST · cClassTrib · Descrição · Tipo alíq. · Redução · TR · CP · EC · DF-e · Anexos`. Exporta em **CSV** ou em **Excel (.xlsx)**, gerado no próprio navegador (OOXML/ZIP montado em JS, sem bibliotecas e sem enviar dado a servidor).
 - **Exportação** do resultado filtrado em CSV (abre no Excel) e JSON.
 
 ## Estrutura
@@ -40,7 +41,7 @@ cst-cclasstrib/
 ├── assets/
 │   ├── styles.css              # visual base (sem frameworks)
 │   ├── corporativo.css         # tema institucional VMF (marinho + dourado)
-│   └── app.js                  # filtros, visões, detalhe, exportação (vanilla JS)
+│   └── app.js                  # filtros, visões, detalhe, exportação e NCM em lote (vanilla JS)
 ├── data/
 │   ├── resumo.json             # dataset enxuto carregado pelo app (~300 KB)
 │   ├── ncm-nbs.json            # índice reverso NCM/NBS → cClassTribs (carga sob demanda)
@@ -53,7 +54,8 @@ cst-cclasstrib/
     ├── atualizar_descricoes.py # regenera ncm-descricoes.json a partir do tipi-data.js
     ├── atualizar_anexo8.py     # regenera anexo-viii.json a partir da planilha do Anexo VIII
     ├── gerar_anexos.py         # fatia os anexos por cClassTrib em data/anexos/
-    └── test_dados.py           # regressão: contagens, cruzamentos, fragmentos, ASSET_V
+    ├── test_dados.py           # regressão: contagens, cruzamentos, fragmentos, ASSET_V
+    └── test_lote.mjs           # regressão: importação em lote de NCM → CSV/Excel
 ```
 
 ## Atualizar os dados
@@ -95,11 +97,26 @@ Notas do Anexo VIII:
 Testes:
 
 ```bash
-python scripts/test_dados.py
-# CI (.github/workflows/ci.yml): node --check assets/app.js + teste acima
+python scripts/test_dados.py     # datasets: contagens, cruzamentos, fragmentos, ASSET_V
+node scripts/test_lote.mjs       # importação em lote: leitura, resolução, CSV e .xlsx
+# CI (.github/workflows/ci.yml): node --check assets/app.js + os dois testes acima
 ```
 
 Snapshot atual: **07/10/2026 (IT 2025.002 v1.70)** — 18 CSTs, 173 cClassTrib. Anexo VIII **V1.01.00 (08/10/2026)** — 1517 correlações, 731 NBS, 28 cClassTrib.
+
+## Importação em lote de NCM
+
+Painel no fim da página (aberto por padrão). Aceita lista colada ou arquivo `.csv`/`.txt`/`.tsv`.
+
+Regras de leitura (tudo no navegador, nada é enviado a servidor):
+
+- **Coluna explícita**: se a primeira linha tiver um cabeçalho `NCM` (ou `NCM consultado`, `Código NCM`, `Cod NCM`), o delimitador (`;`, TAB, `,` ou `|`) é detectado e só aquela coluna é lida — as demais colunas numéricas do arquivo são ignoradas.
+- **Sem cabeçalho**: os códigos são extraídos do próprio texto. Se existir algum código de 7+ dígitos, só os de 7+ dígitos entram (evita capturar quantidade, valor, data); se não houver nenhum, prefixos de 4–8 dígitos valem (ex.: `0901` → todos os NCM do capítulo).
+- Códigos repetidos contam uma vez; a ordem da lista é preservada. Tetos: 5.000 NCMs por importação e 20.000 linhas na saída.
+- NCM com vínculo nos anexos rende **uma linha por cClassTrib**; NCM válido sem vínculo entra com a descrição do produto e as demais colunas vazias; código desconhecido entra só com o código.
+- A coluna **Anexos** é a mesma contagem `qtdAnexos` da tabela principal. A permissão do vínculo (`PERMITIDO`/`VEDADO`) aparece como selo ao lado do NCM na tela, mas não faz parte das colunas exportadas.
+
+Exportação: **CSV** (`;` + BOM UTF-8, abre no Excel) e **Excel .xlsx** — planilha OOXML montada em JS (header congelado e em negrito, `CST`/`cClassTrib` como texto para preservar zeros à esquerda, `Anexos` numérico). Sem bibliotecas externas; usa `CompressionStream` quando o navegador tem, senão ZIP sem compressão.
 
 ## Aviso
 

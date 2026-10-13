@@ -132,6 +132,29 @@
 
   <section id="resultados" aria-live="polite"></section>
 
+  <details class="filtros" id="painelLote" open>
+    <summary>Importar NCM em lote (CSV ou texto) → exportar CSV / Excel</summary>
+    <div class="lote">
+      <label class="busca-rotulo" for="loteTexto">Cole a lista de NCMs ou abra um arquivo CSV/TXT</label>
+      <textarea id="loteTexto" rows="6" spellcheck="false" autocomplete="off"
+        placeholder="07082000&#10;10062010&#10;30049099&#10;…ou uma coluna NCM com cabeçalho no CSV"></textarea>
+      <p class="dica">Aceita um NCM por linha, lista separada por vírgula/ponto e vírgula, ou arquivo CSV/TXT.
+        Reconhece a coluna <code>NCM</code> (cabeçalho) ou, sem cabeçalho, os códigos do próprio texto.
+        Códigos de 7+ dígitos têm prioridade; sem nenhum, prefixos (ex.: <code>0901</code>) também são aceitos.</p>
+      <div class="acoes">
+        <input type="file" id="loteArquivo" accept=".csv,.txt,.tsv,text/csv,text/plain" hidden>
+        <button type="button" id="btnLoteArquivo" class="btn">Abrir CSV/TXT…</button>
+        <button type="button" id="btnLoteProcessar" class="btn">Processar</button>
+        <button type="button" id="btnLoteLimpar" class="btn">Limpar</button>
+        <button type="button" id="btnLoteCsv" class="btn" disabled>Exportar CSV</button>
+        <button type="button" id="btnLoteXlsx" class="btn" disabled>Exportar Excel (.xlsx)</button>
+      </div>
+      <p class="dica" id="loteResumo">Colunas: NCM consultado · CST · cClassTrib · Descrição · Tipo alíq. · Redução · TR · CP · EC · DF-e · Anexos.
+        NCM sem vínculo nos anexos entra com a descrição do produto e as demais colunas vazias.</p>
+      <div id="loteResultados"></div>
+    </div>
+  </details>
+
 </main>
 
 <dialog id="dlg" aria-labelledby="dlgTitulo">
@@ -164,6 +187,6 @@
   </div>
 </footer>
 
-<script src="assets/app.js?v=20261010h" defer></script>
+<script src="assets/app.js?v=20261011a" defer></script>
 </body>
 </html>

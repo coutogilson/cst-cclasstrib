@@ -98,6 +98,31 @@ body {
 .dica { margin: 0; font-size: 0.85rem; color: var(--muted); }
 .visao { display: flex; gap: 10px; flex-wrap: wrap; color: var(--muted); }
 
+/* ---------- importação em lote de NCM ---------- */
+.lote { display: grid; gap: 8px; margin-top: 10px; }
+#loteTexto {
+  width: 100%;
+  min-height: 120px;
+  resize: vertical;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 0.88rem;
+  line-height: 1.5;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fcfdff;
+  color: var(--ink);
+}
+#loteTexto:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+  border-color: var(--accent);
+}
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn:disabled:hover { background: #fff; border-color: var(--line); color: var(--accent); }
+#loteResultados:empty { display: none; }
+#loteResultados { margin-top: 4px; }
+
 /* ---------- filtros ---------- */
 .filtros {
   background: var(--card);

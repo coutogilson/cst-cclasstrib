@@ -30,19 +30,21 @@ const PAI_BADGES = {
 const FILHO_FLAGS = ["IndTribRegular", "IndPermiteCredPres", "IndEstornoCred"];
 
 // Versão dos assets para cache-busting (?v=). Bump a cada release de dados.
-const ASSET_V = "20261010h";
+const ASSET_V = "20261011a";
 const urlV = (p) => `${p}?v=${ASSET_V}`;
 
 let DATA = [];
 let MAP_CCT = new Map();
 let fullCache = null; // full JSON (anexos), carregado sob demanda
 let IDX = null;       // indice reverso NCM/NBS, carregado sob demanda
+let IDX_KEYS = null;  // chaves de IDX.codes ordenadas (busca por prefixo em lote)
 let NCM_DESC = null;  // descricoes NCM (g: grupos, i: itens), sob demanda
 let NCM_NORM = null;  // cache codigo -> descricao normalizada (busca textual)
 let ANEXO8 = null;    // dados do Anexo VIII (NBS x IndOp x cClassTrib), sob demanda
 
 let tBusca = null;
 let tBusca8 = null;
+let tLote = null;
 let lastBtnDetalhe = null;
 
 const $ = (id) => document.getElementById(id);
@@ -767,8 +769,12 @@ const csvCell = (v) => {
 };
 
 function baixar(nome, conteudo, tipo) {
+  baixarBlob(nome, new Blob([conteudo], { type: tipo }));
+}
+
+function baixarBlob(nome, blob) {
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([conteudo], { type: tipo }));
+  a.href = URL.createObjectURL(blob);
   a.download = nome;
   document.body.appendChild(a);
   a.click();
@@ -800,6 +806,419 @@ function exportarJSON(filtered) {
   baixar("cst-cclasstrib.json",
     JSON.stringify(filtered.map((g) => ({ ...g.pai, ClassificacoesTributarias: g.filhos })),
       null, 1), "application/json");
+}
+
+/* ---------- consulta em lote por NCM (importa CSV/texto, exporta CSV/Excel) ---------- */
+
+const LOTE_HEAD = ["NCM consultado", "CST", "cClassTrib", "Descrição", "Tipo alíq.",
+  "Redução", "TR", "CP", "EC", "DF-e", "Anexos"];
+// Larguras (em caracteres) das colunas na planilha.
+const LOTE_LARG = [16, 6, 11, 58, 20, 20, 5, 5, 5, 34, 8];
+const LOTE_DELIM = [";", "\t", ",", "|"];
+const LOTE_MAX_NCM = 5000;   // trava: códigos por importação
+const LOTE_MAX_LINHA = 20000; // trava: linhas geradas
+const LOTE_MAX_TELA = 500;   // linhas renderizadas de uma vez
+
+let LOTE = { ncms: 0, linhas: [], semVinculo: 0, naoEncontrado: 0, truncado: false };
+
+// Nomes de cabeçalho aceitos como coluna de NCM (já normalizados).
+const LOTE_CABECALHO = ["ncm consultado", "ncm", "codigo ncm", "cod ncm", "codncm"];
+
+const soDigitos = (s) => (s ?? "").toString().replace(/\D/g, "");
+
+function dividirLinha(linha, delim) {
+  // Quebra respeitando aspas (CSV padrão: "" escapa aspas).
+  const out = [];
+  let cur = "", aspas = false;
+  for (let i = 0; i < linha.length; i++) {
+    const ch = linha[i];
+    if (aspas) {
+      if (ch !== '"') { cur += ch; continue; }
+      if (linha[i + 1] === '"') { cur += '"'; i++; } else aspas = false;
+    } else if (ch === '"') {
+      aspas = true;
+    } else if (ch === delim) {
+      out.push(cur); cur = "";
+    } else {
+      cur += ch;
+    }
+  }
+  out.push(cur);
+  return out.map((c) => c.trim());
+}
+
+// Coluna NCM de um CSV/TSV com cabeçalho reconhecível; null quando não há.
+function colunaNcm(texto) {
+  const linhas = texto.split(/\r?\n/).filter((l) => l.trim() !== "");
+  if (!linhas.length) return null;
+  for (const d of LOTE_DELIM) {
+    if (!linhas[0].includes(d)) continue;
+    const cab = dividirLinha(linhas[0], d).map((c) => norm(c));
+    let col = cab.findIndex((c) => LOTE_CABECALHO.includes(c));
+    if (col < 0) col = cab.findIndex((c) => /ncm|codigo|cod/.test(c) && !/descri|nome|produto/.test(c));
+    if (col < 0) continue;
+    const out = [];
+    for (const l of linhas.slice(1)) {
+      const dig = soDigitos(dividirLinha(l, d)[col]);
+      if (dig.length >= 4 && dig.length <= 9) out.push(dig);
+    }
+    if (out.length) return out;
+  }
+  return null;
+}
+
+// NCMs soltos no texto (uma por linha, separados por vírgula, com pontos etc.).
+function codigosDeTexto(texto) {
+  const toks = (texto.match(/\d[\d.]*/g) || [])
+    .map(soDigitos)
+    .filter((d) => d.length >= 4 && d.length <= 8);
+  const longos = toks.filter((d) => d.length >= 7);
+  return longos.length ? longos : toks;
+}
+
+function extrairNcms(texto) {
+  const t = (texto || "").trim();
+  if (!t) return [];
+  const cods = colunaNcm(t) || codigosDeTexto(t);
+  const vistos = new Set();
+  const out = [];
+  for (const c of cods) {
+    if (vistos.has(c)) continue;
+    vistos.add(c);
+    out.push(c);
+    if (out.length >= LOTE_MAX_NCM) break;
+  }
+  return out;
+}
+
+// Código do índice (exato ou por prefixo, ex. "0901").
+function casarCodigo(cod) {
+  if (!IDX || !IDX.codes) return [];
+  if (IDX.codes[cod]) return [cod];
+  if (!IDX_KEYS) IDX_KEYS = Object.keys(IDX.codes).sort();
+  let lo = 0, hi = IDX_KEYS.length;
+  while (lo < hi) {
+    const m = (lo + hi) >> 1;
+    if (IDX_KEYS[m] < cod) lo = m + 1; else hi = m;
+  }
+  const out = [];
+  for (let i = lo; i < IDX_KEYS.length && IDX_KEYS[i].startsWith(cod); i++) {
+    out.push(IDX_KEYS[i]);
+    if (out.length >= 300) break;
+  }
+  return out;
+}
+
+function linhaLote(cod, ref, f) {
+  return {
+    ncm: cod,
+    cst: ref[0] || "",
+    cod: ref[1] || "",
+    desc: (f && (f.NomeReduzido || f.NomeClassTrib) || "").trim(),
+    tipo: f && f.TipoAliq ? `${f.TipoAliq} — ${TIPO_ALIQ[f.TipoAliq] || ""}` : "",
+    red: f ? ([fmtPerc(f.PercRedIbs), fmtPerc(f.PercRedCbs)].join(" · ")) : "",
+    tr: f ? (f.IndTribRegular ? "Sim" : "Não") : "",
+    cp: f ? (f.IndPermiteCredPres ? "Sim" : "Não") : "",
+    ec: f ? (f.IndEstornoCred ? "Sim" : "Não") : "",
+    dfe: f ? (dfesOf(f).join(", ") || "—") : "",
+    anexos: f && f.qtdAnexos ? f.qtdAnexos : "",
+    perm: ref[2] || "",
+    nota: "",
+  };
+}
+
+function montarLote(ncms) {
+  const linhas = [];
+  let semVinculo = 0, naoEncontrado = 0, truncado = false;
+  for (const ncm of ncms) {
+    const cods = casarCodigo(ncm);
+    if (!cods.length) {
+      const desc = descNcm(ncm) || "";
+      if (desc) semVinculo++; else naoEncontrado++;
+      linhas.push({
+        ncm, cst: "", cod: "", desc, tipo: "", red: "", tr: "", cp: "", ec: "",
+        dfe: "", anexos: "", perm: "",
+        nota: desc ? "sem vínculo nos anexos" : "não encontrado no índice",
+      });
+      continue;
+    }
+    for (const cod of cods) {
+      const e = IDX.codes[cod] || {};
+      const refs = e.ref || [];
+      if (!refs.length) continue;
+      for (const r of refs) {
+        const f = (MAP_CCT.get(r[1]) || {}).filho;
+        linhas.push(linhaLote(cod, r, f));
+      }
+    }
+    if (linhas.length >= LOTE_MAX_LINHA) { truncado = true; break; }
+  }
+  LOTE = { ncms: ncms.length, linhas, semVinculo, naoEncontrado, truncado };
+}
+
+function renderLote() {
+  const box = $("loteResultados");
+  const info = $("loteResumo");
+  const n = LOTE.linhas.length;
+  $("btnLoteCsv").disabled = !n;
+  $("btnLoteXlsx").disabled = !n;
+
+  if (!LOTE.ncms) {
+    info.textContent = "Colunas: " + LOTE_HEAD.join(" · ") + ".";
+    box.innerHTML = "";
+    return;
+  }
+  const partes = [
+    `${LOTE.ncms} NCM(s) importado(s)`,
+    `${n} linha(s)`,
+  ];
+  if (LOTE.semVinculo) partes.push(`${LOTE.semVinculo} sem vínculo`);
+  if (LOTE.naoEncontrado) partes.push(`${LOTE.naoEncontrado} não encontrado(s)`);
+  if (LOTE.truncado) partes.push(`limitado a ${LOTE_MAX_LINHA} linhas`);
+  info.textContent = partes.join(" · ") + ".";
+
+  if (!n) {
+    box.innerHTML = `<div class="vazio">Nenhum NCM reconhecido no texto importado.
+      Use 7+ dígitos por código (ex.: <code>07082000</code>) ou prefixos quando não houver
+      nenhum código completo (ex.: <code>0901</code>).</div>`;
+    return;
+  }
+  const mostra = LOTE.linhas.slice(0, LOTE_MAX_TELA);
+  const linhas = mostra.map((l) => `<tr>
+    <td class="cod">${esc(l.ncm)}${l.perm ? `<span class="via-ncm${l.perm === "VEDADO" ? " ved" : ""}">${esc(l.perm)}</span>` : ""}</td>
+    <td class="cod">${l.cst ? esc(l.cst) : "—"}</td>
+    <td class="cod">${l.cod ? esc(l.cod) : "—"}</td>
+    <td>${l.desc ? esc(l.desc) : "—"}${l.nota ? `<span class="via-ncm">${esc(l.nota)}</span>` : ""}</td>
+    <td class="num">${l.tipo ? esc(l.tipo) : "—"}</td>
+    <td class="num">${l.red ? esc(l.red) : "—"}</td>
+    <td>${l.tr ? esc(l.tr) : "—"}</td>
+    <td>${l.cp ? esc(l.cp) : "—"}</td>
+    <td>${l.ec ? esc(l.ec) : "—"}</td>
+    <td class="dfes">${esc(l.dfe || "—")}</td>
+    <td class="num">${l.anexos === "" ? "—" : esc(String(l.anexos))}</td>
+  </tr>`).join("");
+  box.innerHTML = `<div class="tab-wrap"><table>
+    <thead><tr>${LOTE_HEAD.map((h, i) => `<th${i === 0 ? ' title="Código encontrado no índice NCM/NBS"' : ""}>${esc(h)}</th>`).join("")}<th></th></tr></thead>
+    <tbody>${linhas}</tbody></table></div>
+    ${n > mostra.length ? `<p class="dica" style="margin:8px 0 0">Mostrando ${mostra.length} de ${n} linhas — a exportação inclui todas.</p>` : ""}`;
+}
+
+function linhasParaExportar() {
+  return LOTE.linhas.map((l) =>
+    [l.ncm, l.cst, l.cod, l.desc, l.tipo, l.red, l.tr, l.cp, l.ec, l.dfe, l.anexos]);
+}
+
+async function processarLote() {
+  const texto = $("loteTexto").value;
+  if (!texto.trim()) {
+    LOTE = { ncms: 0, linhas: [], semVinculo: 0, naoEncontrado: 0, truncado: false };
+    renderLote();
+    return;
+  }
+  const ok = await garantirIdx(false);
+  if (!ok || !IDX) {
+    $("loteResumo").textContent = "Não foi possível carregar o índice NCM (data/ncm-nbs.json).";
+    return;
+  }
+  montarLote(extrairNcms(texto));
+  renderLote();
+}
+
+function lerArquivoLote(ev) {
+  const arq = ev.target.files && ev.target.files[0];
+  if (!arq) return;
+  const r = new FileReader();
+  // Só os dígitos importam, então UTF-8 x Latin-1 não muda o resultado.
+  r.onload = () => {
+    $("loteTexto").value = String(r.result || "").replace(/\u0000/g, "").slice(0, 1000000);
+    processarLote();
+  };
+  r.onerror = () => { $("loteResumo").textContent = `Não foi possível ler "${arq.name}".`; };
+  r.readAsText(arq, "utf-8");
+  ev.target.value = ""; // permite reabrir o mesmo arquivo
+}
+
+function limparLote() {
+  $("loteTexto").value = "";
+  LOTE = { ncms: 0, linhas: [], semVinculo: 0, naoEncontrado: 0, truncado: false };
+  renderLote();
+  $("loteTexto").focus();
+}
+
+function exportarLoteCSV() {
+  if (!LOTE.linhas.length) return;
+  const linhas = [LOTE_HEAD.map(csvCell).join(";")];
+  for (const l of linhasParaExportar()) linhas.push(l.map(csvCell).join(";"));
+  baixar("ncm-cst-cclasstrib.csv", "﻿" + linhas.join("\r\n"), "text/csv;charset=utf-8");
+}
+
+async function exportarLoteXLSX() {
+  if (!LOTE.linhas.length) return;
+  // Anexos é a única coluna numérica; os códigos precisam ficar como texto
+  // (CST "000" e cClassTrib com zero à esquerda).
+  const dados = [LOTE_HEAD.slice()];
+  for (const l of linhasParaExportar()) {
+    const r = l.slice();
+    r[10] = r[10] === "" ? "" : Number(r[10]);
+    dados.push(r);
+  }
+  const nome = "ncm-cst-cclasstrib.xlsx";
+  try {
+    baixarBlob(nome, await xlsxBlob("NCM x cClassTrib", dados, LOTE_LARG));
+  } catch (e) {
+    $("loteResumo").textContent = `Falha ao gerar a planilha (${e.message}). Use a exportação CSV.`;
+  }
+}
+
+/* ---------- planilha .xlsx sem dependências (OOXML + ZIP) ---------- */
+
+const CRC_TAB = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(bytes) {
+  let c = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) c = CRC_TAB[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+// Compressão nativa (deflate) quando disponível; senão, ZIP "store".
+async function deflateRaw(bytes) {
+  if (typeof CompressionStream === "undefined" || typeof Response === "undefined") return null;
+  try {
+    const fluxo = new Blob([bytes]).stream().pipeThrough(new CompressionStream("deflate-raw"));
+    return new Uint8Array(await new Response(fluxo).arrayBuffer());
+  } catch (e) {
+    return null;
+  }
+}
+
+// ZIP do pacote OOXML (método 8 = deflate, 0 = store).
+async function zipStore(arquivos) {
+  const enc = new TextEncoder();
+  const entradas = [];
+  for (const [nome, conteudo] of arquivos) {
+    const nomeB = enc.encode(nome);
+    const dados = typeof conteudo === "string" ? enc.encode(conteudo) : conteudo;
+    const comp = await deflateRaw(dados);
+    entradas.push(comp && comp.length < dados.length
+      ? { nomeB, dados: comp, tam: dados.length, crc: crc32(dados), metodo: 8 }
+      : { nomeB, dados, tam: dados.length, crc: crc32(dados), metodo: 0 });
+  }
+  const partes = [];
+  const central = [];
+  let offset = 0;
+  for (const e of entradas) {
+    const cab = new Uint8Array(30);
+    const dv = new DataView(cab.buffer);
+    dv.setUint32(0, 0x04034b50, true);
+    dv.setUint16(4, 20, true);     // versão necessária
+    dv.setUint16(6, 0x0800, true); // nomes em UTF-8
+    dv.setUint16(8, e.metodo, true);
+    dv.setUint16(10, 0, true);     // hora
+    dv.setUint16(12, 0x21, true);  // data (01/01/1980)
+    dv.setUint32(14, e.crc, true);
+    dv.setUint32(18, e.dados.length, true);
+    dv.setUint32(22, e.tam, true);
+    dv.setUint16(26, e.nomeB.length, true);
+    dv.setUint16(28, 0, true);
+    central.push({ nomeB: e.nomeB, crc: e.crc, comp: e.dados.length, tam: e.tam, metodo: e.metodo, offset });
+    partes.push(cab, e.nomeB, e.dados);
+    offset += cab.length + e.nomeB.length + e.dados.length;
+  }
+  const cdIni = offset;
+  for (const c of central) {
+    const cab = new Uint8Array(46);
+    const dv = new DataView(cab.buffer);
+    dv.setUint32(0, 0x02014b50, true);
+    dv.setUint16(4, 20, true);
+    dv.setUint16(6, 20, true);
+    dv.setUint16(8, 0x0800, true);
+    dv.setUint16(10, c.metodo, true);
+    dv.setUint16(12, 0, true);
+    dv.setUint16(14, 0x21, true);
+    dv.setUint32(16, c.crc, true);
+    dv.setUint32(20, c.comp, true);
+    dv.setUint32(24, c.tam, true);
+    dv.setUint16(28, c.nomeB.length, true);
+    dv.setUint32(42, c.offset, true);
+    partes.push(cab, c.nomeB);
+    offset += cab.length + c.nomeB.length;
+  }
+  const fim = new Uint8Array(22);
+  const dvf = new DataView(fim.buffer);
+  dvf.setUint32(0, 0x06054b50, true);
+  dvf.setUint16(8, central.length, true);
+  dvf.setUint16(10, central.length, true);
+  dvf.setUint32(12, offset - cdIni, true);
+  dvf.setUint32(16, cdIni, true);
+  partes.push(fim);
+  let total = 0;
+  for (const p of partes) total += p.length;
+  const out = new Uint8Array(total);
+  let pos = 0;
+  for (const p of partes) { out.set(p, pos); pos += p.length; }
+  return out;
+}
+
+function xlsxCol(n) {
+  let s = "";
+  while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = (n - 1 - r) / 26; }
+  return s;
+}
+
+const xlsxEsc = (v) =>
+  String(v).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "")
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+function xlsxPlanilha(linhas, larguras) {
+  const cols = larguras && larguras.length
+    ? `<cols>${larguras.map((w, i) =>
+        `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join("")}</cols>`
+    : "";
+  const rows = linhas.map((cels, i) => {
+    const cs = cels.map((v, j) => {
+      const ref = xlsxCol(j + 1) + (i + 1);
+      const est = i === 0 ? ' s="1"' : "";
+      if (v === null || v === undefined || v === "") return `<c r="${ref}"${est}/>`;
+      if (typeof v === "number" && isFinite(v)) return `<c r="${ref}"${est}><v>${v}</v></c>`;
+      return `<c r="${ref}" t="inlineStr"${est}><is><t xml:space="preserve">${xlsxEsc(v)}</t></is></c>`;
+    }).join("");
+    return `<row r="${i + 1}">${cs}</row>`;
+  }).join("");
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>${cols}<sheetData>${rows}</sheetData></worksheet>`;
+}
+
+async function xlsxBlob(nomeAba, linhas, larguras) {
+  const arquivos = [
+    ["[Content_Types].xml",
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`],
+    ["_rels/.rels",
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`],
+    ["xl/workbook.xml",
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${xlsxEsc(nomeAba)}" sheetId="1" r:id="rId1"/></sheets></workbook>`],
+    ["xl/_rels/workbook.xml.rels",
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`],
+    ["xl/styles.xml",
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`],
+    ["xl/worksheets/sheet1.xml", xlsxPlanilha(linhas, larguras)],
+  ];
+  return new Blob([await zipStore(arquivos)], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
 }
 
 /* ---------- init ---------- */
@@ -924,11 +1343,23 @@ $("dlg").addEventListener("close", () => {
   $("fNomeRed").addEventListener("input", agenda);
   $("fCst").addEventListener("change", () => { reconstruirCodigos(); atualizar(); });
   document.querySelectorAll("select, input").forEach((el) => {
-    if (!["q", "q8", "fNomeCst", "fNomeRed"].includes(el.id)) el.addEventListener("change", atualizar);
+    if (!["q", "q8", "fNomeCst", "fNomeRed", "loteArquivo"].includes(el.id)) el.addEventListener("change", atualizar);
   });
   $("btnLimpar").onclick = limpar;
   $("btnCsv").onclick = () => exportarCSV(applyFilters(DATA, collectFilters()));
   $("btnJson").onclick = () => exportarJSON(applyFilters(DATA, collectFilters()));
+
+  // Consulta em lote por NCM (importa CSV/texto, exporta CSV/Excel).
+  $("btnLoteArquivo").onclick = () => $("loteArquivo").click();
+  $("loteArquivo").addEventListener("change", lerArquivoLote);
+  $("btnLoteProcessar").onclick = processarLote;
+  $("btnLoteLimpar").onclick = limparLote;
+  $("btnLoteCsv").onclick = exportarLoteCSV;
+  $("btnLoteXlsx").onclick = exportarLoteXLSX;
+  $("loteTexto").addEventListener("input", () => {
+    clearTimeout(tLote);
+    tLote = setTimeout(processarLote, 400);
+  });
 
   atualizar();
 
