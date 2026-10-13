@@ -166,7 +166,9 @@ def main():
     if not ok:
         falhas.append("anexos-fragmentos-x-full")
 
-    # ASSET_V consistente entre index.html e assets/app.js
+    # ASSET_V consistente entre index.html, assets/app.js e os CSS
+    # (o CSS também é versionado: sem ?v= a correção de layout pode não chegar
+    # ao navegador de quem já visitou o site).
     html = open(os.path.join(REPO, "index.html"), encoding="utf-8").read()
     js = open(os.path.join(REPO, "assets", "app.js"), encoding="utf-8").read()
     m_html = re.search(r"assets/app\.js\?v=([\w.-]+)", html)
@@ -177,6 +179,14 @@ def main():
     print(f"{'OK  ' if ok else 'FAIL'} ASSET_V: html={vh} js={vj}")
     if not ok:
         falhas.append("asset-v-divergente")
+
+    vcss = re.findall(r"assets/([\w.-]+\.css)\?v=([\w.-]+)", html)
+    sem_v = re.findall(r'assets/[\w.-]+\.css"', html)
+    ok = bool(vcss) and not sem_v and all(v == vh for _, v in vcss)
+    print(f"{'OK  ' if ok else 'FAIL'} ASSET_V nos CSS: "
+          f"{dict(vcss) if vcss else 'nenhum ?v='} (sem ?v=: {len(sem_v)})")
+    if not ok:
+        falhas.append("css-sem-versao")
 
     if falhas:
         print(f"\n{len(falhas)} falha(s): {falhas}")

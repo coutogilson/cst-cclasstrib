@@ -15,6 +15,19 @@ const TIPO_ALIQ = {
   4: "Uniforme nacional", 5: "Uniforme setorial",
 };
 
+// Regra geral do IBS/CBS: bem sem vínculo em nenhum anexo de cClassTrib é
+// tributado integralmente, ou seja CST 000 + cClassTrib 000001. O próprio
+// registro 000001 ("Situações tributadas integralmente pelo IBS e CBS.")
+// aponta essa base legal em TexUrlLegislacao -> LC 214/2025, art. 4º, e é o
+// único cClassTrib residual do CST 000 (não tem anexo e não descreve regime
+// específico). Por isso serve de classificação padrão quando a consulta por
+// NCM não encontra vínculo.
+const REGRA_GERAL_CST = "000";
+const REGRA_GERAL_CCT = "000001";
+const REGRA_GERAL_TXT = "regra geral";
+const REGRA_GERAL_NOTA =
+  `sem vínculo em anexo — ${REGRA_GERAL_TXT} ${REGRA_GERAL_CST}/${REGRA_GERAL_CCT} (LC 214/2025, art. 4º)`;
+
 const PAI_CHECKS = [
   "IndExigeTrib", "IndReducaoBc", "IndReducaoAliq", "IndTransferenciaCred",
   "IndDiferimento", "IndMonofasica", "IndCredPresIbsZfm", "IndAjusteCompet",
@@ -30,7 +43,7 @@ const PAI_BADGES = {
 const FILHO_FLAGS = ["IndTribRegular", "IndPermiteCredPres", "IndEstornoCred"];
 
 // Versão dos assets para cache-busting (?v=). Bump a cada release de dados.
-const ASSET_V = "20261011a";
+const ASSET_V = "20261013c";
 const urlV = (p) => `${p}?v=${ASSET_V}`;
 
 let DATA = [];
@@ -45,6 +58,7 @@ let ANEXO8 = null;    // dados do Anexo VIII (NBS x IndOp x cClassTrib), sob dem
 let tBusca = null;
 let tBusca8 = null;
 let tLote = null;
+let tLoteFiltro = null;
 let lastBtnDetalhe = null;
 
 const $ = (id) => document.getElementById(id);
@@ -71,6 +85,14 @@ const fmtPerc = (v) => {
     ? String(n)
     : String(n).replace(/0+$/, "").replace(/\.$/, "").replace(".", ",");
   return `${s}%`;
+};
+
+// Redução sempre com o imposto explícito e na ordem CBS → IBS.
+const fmtReducao = (f) => {
+  if (!f) return "";
+  const ibs = fmtPerc(f.PercRedIbs);
+  const cbs = fmtPerc(f.PercRedCbs);
+  return ibs === "—" && cbs === "—" ? "—" : `CBS ${cbs} · IBS ${ibs}`;
 };
 
 const celBool = (v) =>
@@ -214,6 +236,25 @@ function applyFilters(data, F) {
     avulsos = txt.avulsos;
     parcial = txt.parcial;
   }
+  // NCM valido (8 digitos) com descricao, mesmo sem vinculo nos anexos
+  if (F.q && normCod(F.q).length === 8 &&
+      (!ncmMap || !Object.keys(ncmMap).length)) {
+    const qc = normCod(F.q);
+    const d = descNcm(qc);
+    if (d && !avulsos.some((a) => a.codigo === qc)) avulsos.push({ codigo: qc, desc: d });
+  }
+  // NCM localizado que nao aparece em nenhum anexo de cClassTrib nao fica sem
+  // resposta: a classificacao e a regra geral (CST 000 / cClassTrib 000001).
+  const regraGeral = avulsos.length > 0 && MAP_CCT.has(REGRA_GERAL_CCT);
+  if (regraGeral) {
+    ncmMap = ncmMap || {};
+    const base = (ncmMap[REGRA_GERAL_CCT] = ncmMap[REGRA_GERAL_CCT] || []);
+    for (const a of avulsos) {
+      if (!base.some((y) => y.codigo === a.codigo)) {
+        base.push({ codigo: a.codigo, perm: "", regra: true });
+      }
+    }
+  }
   const ncmSet = ncmMap ? new Set(Object.keys(ncmMap)) : null;
   const out = [];
   let viaNcm = false;
@@ -253,16 +294,8 @@ function applyFilters(data, F) {
       if (!out.ncmDesc[a.codigo]) out.ncmDesc[a.codigo] = a.desc;
     }
   }
-  // NCM valido (8 digitos) com descricao, mesmo sem vinculo nos anexos
   out.ncmAvulso = avulsos.slice();
-  if (!out.length && F.q && normCod(F.q).length === 8 &&
-      (!ncmMap || !Object.keys(ncmMap).length)) {
-    const qc = normCod(F.q);
-    const d = descNcm(qc);
-    if (d && !out.ncmAvulso.some((a) => a.codigo === qc)) {
-      out.ncmAvulso.push({ codigo: qc, desc: d });
-    }
-  }
+  out.regraGeral = regraGeral;
   return out;
 }
 
@@ -297,8 +330,6 @@ function buscarNcm(idx, query, limite = 200) {
 }
 
 /* ---------- Anexo VIII (NBS x IndOp x cClassTrib) ---------- */
-let pagina8 = 0;
-const PAGE8 = 100;
 
 function infoVersao8() {
   if (!ANEXO8 || !ANEXO8.meta) return "";
@@ -363,8 +394,7 @@ function renderAnexo8() {
     ? `${itens.length} correlação(ões) em ${m.correlacoes} totais`
     : `${m.correlacoes} correlações disponíveis — digite para filtrar`;
   if (!filtrando) {
-    const maxPag = Math.max(1, Math.ceil(ANEXO8.itens.length / PAGE8));
-    pagina8 = Math.min(pagina8, maxPag - 1);
+    pagina8 = 0;
     box.innerHTML = `<div class="vazio">Digite NBS, IndOp, cClassTrib ou palavra para listar. ` +
       `Nada é renderizado até filtrar, para preservar performance.</div>`;
     return;
@@ -399,15 +429,12 @@ function renderAnexo8() {
       <th>cClassTrib</th><th>Nome cClassTrib</th>
     </tr></thead>
     <tbody>${linhas}</tbody></table></div>
-    <div class="paginacao" style="display:flex;gap:8px;align-items:center;padding:8px 16px">
-      <button type="button" class="btn btn-mini" id="pgAnt8" ${pagina8 === 0 ? "disabled" : ""}>← Anterior</button>
-      <span style="color:var(--muted)">Página ${pagina8 + 1} de ${totalPag} · mostrando ${ini + 1}–${Math.min(ini + PAGE8, itens.length)} de ${itens.length}</span>
-      <button type="button" class="btn btn-mini" id="pgProx8" ${pagina8 >= totalPag - 1 ? "disabled" : ""}>Próxima →</button>
-    </div>
+    ${barraPaginaSimples(itens.length, pagina8, PAGE8)}
   </div>`;
-  const ant = $("pgAnt8"), prox = $("pgProx8");
-  if (ant) ant.onclick = () => { if (pagina8 > 0) { pagina8--; renderAnexo8(); } };
-  if (prox) prox.onclick = () => { if (pagina8 < totalPag - 1) { pagina8++; renderAnexo8(); } };
+  ligarPaginaSimples(box, (delta) => {
+    pagina8 += delta;
+    renderAnexo8();
+  });
 }
 
 function renderRegra8() {
@@ -439,6 +466,85 @@ function exportarCSVAnexo8() {
     "﻿" + linhas.join("\r\n"), "text/csv;charset=utf-8");
 }
 
+/* ---------- preferências do usuário (localStorage) ---------- */
+const PREF_KEY = "cst-cclasstrib:prefs";
+
+function lerPrefs() {
+  try { return JSON.parse(localStorage.getItem(PREF_KEY)) || {}; } catch (e) { return {}; }
+}
+
+function gravarPrefs(patch) {
+  try {
+    localStorage.setItem(PREF_KEY, JSON.stringify({ ...lerPrefs(), ...patch }));
+  } catch (e) { /* modo privado / file:// — segue sem persistir */ }
+}
+
+/* ---------- componentes compartilhados ---------- */
+// Paginação do lote (com escolha de linhas por página) e paginação simples das
+// janelas de consulta individual, no mesmo formato que já existia no Anexo VIII.
+const TAMS = [25, 50, 100, 200];
+const PAGE8 = 100;   // janela NBS
+const PAG = 100;     // janela 1 na visão aberta por cClassTrib
+const totalPaginas = (total, tam) => Math.max(1, Math.ceil(total / Math.max(1, tam)));
+const paginaValida = (pagina, total, tam) => Math.min(Math.max(0, pagina), totalPaginas(total, tam) - 1);
+
+const LEGENDA = "TR = tributação regular · CP = permite crédito presumido · " +
+  "EC = estorno de crédito · DF-e = documentos fiscais aplicáveis · " +
+  "Anexos = itens de anexo (NCM/NBS) do cClassTrib";
+
+// Estado das paginanções é guardado fora do DOM (sobrevive ao re-render).
+let paginaCst = 0;
+let pagina8 = 0;
+
+function barraPaginacao(id, total, pagina, tam, rotulo) {
+  if (total <= TAMS[0]) return "";
+  const tp = totalPaginas(total, tam);
+  const pg = paginaValida(pagina, total, tam);
+  const ini = pg * tam;
+  const fim = Math.min(ini + tam, total);
+  return `<div class="paginacao">
+    <button type="button" class="btn btn-mini" data-pg="${id}:ant"${pg === 0 ? " disabled" : ""}>← Anterior</button>
+    <span class="contador">${rotulo ? esc(rotulo) + " · " : ""}mostrando ${ini + 1}–${fim} de ${total} · página ${pg + 1} de ${tp}</span>
+    <button type="button" class="btn btn-mini" data-pg="${id}:prox"${pg >= tp - 1 ? " disabled" : ""}>Próxima →</button>
+    <label class="tam-pagina">Linhas por página
+      <select data-pg="${id}:tam" aria-label="Linhas por página">
+        ${TAMS.map((n) => `<option value="${n}"${n === tam ? " selected" : ""}>${n}</option>`).join("")}
+      </select>
+    </label>
+  </div>`;
+}
+
+function ligarPaginacao(escopo, id, aoMudar) {
+  if (!escopo || !escopo.querySelectorAll) return;
+  escopo.querySelectorAll(`[data-pg^="${id}:"]`).forEach((el) => {
+    const acao = el.dataset.pg.slice(id.length + 1);
+    if (el.tagName === "SELECT") el.onchange = () => aoMudar("tam", Number(el.value));
+    else el.onclick = () => aoMudar(acao, null);
+  });
+}
+
+// "← Anterior · Página X de Y · mostrando A–B de N · Próxima →", como na janela NBS.
+function barraPaginaSimples(total, pagina, tam) {
+  if (total <= tam) return "";
+  const tp = totalPaginas(total, tam);
+  const pg = paginaValida(pagina, total, tam);
+  const ini = pg * tam;
+  const fim = Math.min(ini + tam, total);
+  return `<div class="paginacao" style="display:flex;gap:8px;align-items:center;padding:8px 16px">
+    <button type="button" class="btn btn-mini" data-pagina="ant"${pg === 0 ? " disabled" : ""}>← Anterior</button>
+    <span style="color:var(--muted)">Página ${pg + 1} de ${tp} · mostrando ${ini + 1}–${fim} de ${total}</span>
+    <button type="button" class="btn btn-mini" data-pagina="prox"${pg >= tp - 1 ? " disabled" : ""}>Próxima →</button>
+  </div>`;
+}
+
+function ligarPaginaSimples(escopo, aoMudar) {
+  if (!escopo || !escopo.querySelectorAll) return;
+  escopo.querySelectorAll("[data-pagina]").forEach((b) => {
+    const delta = b.dataset.pagina === "ant" ? -1 : 1;
+    b.onclick = () => aoMudar(delta);
+  });
+}
+
 /* ---------- render ---------- */
 function badgesPai(p) {
   return Object.entries(PAI_BADGES)
@@ -447,13 +553,18 @@ function badgesPai(p) {
     .join("");
 }
 
+const BADGE_MAX = 12;
 function badgeNcm(info, cod, descs) {
-  return (info[cod] || []).map((e) => {
+  const itens = info[cod] || [];
+  const html = itens.slice(0, BADGE_MAX).map((e) => {
     const d = (descs || {})[e.codigo];
+    const rot = e.regra ? REGRA_GERAL_TXT : e.perm;
     return `<span class="via-ncm${e.perm === "VEDADO" ? " ved" : ""}"` +
       (d ? ` title="${esc(d)}"` : "") +
-      `>${esc(e.codigo)} · ${esc(e.perm)}</span>`;
+      `>${esc(e.codigo)} · ${esc(rot)}</span>`;
   }).join("");
+  return html + (itens.length > BADGE_MAX
+    ? `<span class="via-ncm">+${itens.length - BADGE_MAX}</span>` : "");
 }
 
 function descNcm(code) {
@@ -502,24 +613,45 @@ function descBox(descs) {
   return `<div class="ncm-desc"><strong>NCM consultado:</strong>${linhas}</div>`;
 }
 
+// Aviso de que a linha CST 000 / cClassTrib 000001 veio da regra geral, e não
+// de um vínculo do NCM consultado nos anexos.
+const avisoRegraGeral = () =>
+  `<p class="regra-geral">NCM sem vínculo em anexo de cClassTrib: aplica-se a
+   <strong>regra geral</strong> — CST <code>${REGRA_GERAL_CST}</code> ·
+   cClassTrib <code>${REGRA_GERAL_CCT}</code> (LC 214/2025, art. 4º).</p>`;
+
+function temFiltro(F) {
+  return !!(F.q || F.cst || F.nomeCst || F.paiInd.length || F.cod ||
+    F.nomeRed || F.tipoAliq || F.filhoFlags.length || F.dfes.length);
+}
+
 function render(filtered, F) {
   const box = $("resultados");
   const total = filtered.reduce((a, g) => a + g.filhos.length, 0);
   $("contador").textContent =
     `${total} classificação(ões) em ${filtered.length} CST(s)` +
-    (filtered.viaNcm ? " · inclui vínculos NCM" : "") +
+    (filtered.regraGeral
+      ? ` · NCM sem vínculo: regra geral ${REGRA_GERAL_CST}/${REGRA_GERAL_CCT}`
+      : filtered.viaNcm ? " · inclui vínculos NCM" : "") +
     (filtered.ncmParcial ? " · lista parcial, refine a busca" : "");
 
   if (!total) {
     const av = filtered.ncmAvulso || [];
     if (av.length) {
-      $("contador").textContent = "NCM localizado · sem vínculos com cClassTrib";
+      $("contador").textContent = filtered.regraGeral
+        ? "NCM localizado · regra geral ocultada pelos filtros"
+        : "NCM localizado · sem vínculos com cClassTrib";
       const mostrar = av.slice(0, 20);
       box.innerHTML =
         `<div class="ncm-desc"><strong>NCM localizado${av.length > 1 ? "s" : ""}:</strong>` +
         mostrar.map((n) => `<div><code>${esc(n.codigo)}</code> — ${esc(n.desc)}</div>`).join("") +
         (av.length > mostrar.length ? `<div>…e mais ${av.length - mostrar.length}. Refine a busca.</div>` : "") +
-        `<p style="margin:8px 0 0;color:var(--muted)">Sem vínculos nos anexos de cClassTrib.</p></div>`;
+        (filtered.regraGeral
+          ? `<p style="margin:8px 0 0;color:var(--muted)">Sem vínculo nos anexos de cClassTrib: aplica-se a
+             regra geral <code>${REGRA_GERAL_CST}</code>/<code>${REGRA_GERAL_CCT}</code>
+             (LC 214/2025, art. 4º), ocultada pelos filtros ativos.</p>`
+          : `<p style="margin:8px 0 0;color:var(--muted)">Sem vínculos nos anexos de cClassTrib.</p>`) +
+        `</div>`;
       return;
     }
     box.innerHTML = `<div class="vazio">Nenhum resultado para os filtros atuais. Serviços (NBS) ficam na janela 2 (Anexo VIII).
@@ -531,26 +663,43 @@ function render(filtered, F) {
   const info = filtered.ncmInfo || {};
   const descs = filtered.ncmDesc || {};
   const descKeys = Object.keys(descs);
+  const cabeca = (descKeys.length ? descBox(descs) : "") +
+    (filtered.regraGeral ? avisoRegraGeral() : "");
+
   if (F.view === "lista") {
-    const linhas = filtered
-      .flatMap((g) => g.filhos.map((f) => linhaFilho(f, true, badgeNcm(info, f.CodClassTrib, descs))))
-      .join("");
-    box.innerHTML = (descKeys.length ? descBox(descs) : "") +
+    // Visão aberta por cClassTrib: uma tabela só, paginada.
+    const todas = [];
+    for (const g of filtered)
+      for (const f of g.filhos)
+        todas.push({ f, badge: badgeNcm(info, f.CodClassTrib, descs) });
+    paginaCst = paginaValida(paginaCst, todas.length, PAG);
+    const ini = paginaCst * PAG;
+    const fatia = todas.slice(ini, ini + PAG);
+    box.innerHTML = cabeca +
       `<div class="grupo"><div class="tab-wrap">
-      <table>${headFilho(true)}<tbody>${linhas}</tbody></table></div></div>`;
+      <table>${headFilho(true)}<tbody>${fatia.map((x) => linhaFilho(x.f, true, x.badge)).join("")}</tbody></table></div>
+      ${barraPaginaSimples(todas.length, paginaCst, PAG)}</div>`;
+    ligarPaginaSimples(box, (delta) => {
+      paginaCst += delta;
+      render(filtered, F);
+    });
   } else {
-    box.innerHTML = (descKeys.length ? descBox(descs) : "") + filtered.map((g) => `
-      <article class="grupo">
-        <div class="grupo-head">
+    // Agrupada por CST: sem critério ativo a página cairia nos 18 CSTs / 173
+    // cClassTrib de uma vez, então os blocos nascem recolhidos e abrem no clique
+    // (filtrando, já vêm abertos).
+    const aberto = temFiltro(F);
+    box.innerHTML = cabeca + filtered.map((g) => `
+      <details class="grupo"${aberto ? " open" : ""}>
+        <summary class="grupo-head">
           <h2><code>${esc(g.pai.Cst)}</code> — ${esc(g.pai.NomeCst || "")}</h2>
           <p>Vigência: ${fmtDate(g.pai.DthIniVig)} a ${fmtDate(g.pai.DthFimVig)}
              · ${g.filhos.length} classificação(ões)</p>
-        </div>
+        </summary>
         ${badgesPai(g.pai) ? `<div class="badges">${badgesPai(g.pai)}</div>` : ""}
         <div class="tab-wrap"><table>${headFilho(false)}
           <tbody>${g.filhos.map((f) => linhaFilho(f, false, badgeNcm(info, f.CodClassTrib, descs))).join("")}</tbody>
         </table></div>
-      </article>`).join("");
+      </details>`).join("");
   }
 
   box.querySelectorAll("[data-detalhe]").forEach((b) =>
@@ -810,21 +959,82 @@ function exportarJSON(filtered) {
 
 /* ---------- consulta em lote por NCM (importa CSV/texto, exporta CSV/Excel) ---------- */
 
-const LOTE_HEAD = ["NCM consultado", "CST", "cClassTrib", "Descrição", "Tipo alíq.",
-  "Redução", "TR", "CP", "EC", "DF-e", "Anexos"];
-// Larguras (em caracteres) das colunas na planilha.
-const LOTE_LARG = [16, 6, 11, 58, 20, 20, 5, 5, 5, 34, 8];
+// Colunas da lista em lote: ordem de exibição, largura na planilha, tipo do
+// valor (para ordenar e para decidir texto x número no .xlsx), a classe da
+// célula na tela e de onde o valor sai.
+const LOTE_COLS = [
+  { id: "ncm", rotulo: "NCM consultado", larg: 16, tipo: "cod", cls: "cod", valor: (l) => l.ncm },
+  { id: "descNcm", rotulo: "Descrição NCM", larg: 52, tipo: "txt", cls: "dsc", valor: (l) => l.descNcm },
+  { id: "cst", rotulo: "CST", larg: 6, tipo: "cod", cls: "cod", valor: (l) => l.cst },
+  { id: "cod", rotulo: "cClassTrib", larg: 11, tipo: "cod", cls: "cod", valor: (l) => l.cod },
+  { id: "desc", rotulo: "Descrição CClassTrib", larg: 58, tipo: "txt", cls: "", valor: (l) => l.desc },
+  { id: "tipo", rotulo: "Tipo alíq.", larg: 20, tipo: "txt", cls: "num", valor: (l) => l.tipo },
+  { id: "red", rotulo: "Redução", larg: 20, tipo: "txt", cls: "num", valor: (l) => l.red },
+  { id: "tr", rotulo: "TR", larg: 5, tipo: "txt", cls: "", valor: (l) => l.tr },
+  { id: "cp", rotulo: "CP", larg: 5, tipo: "txt", cls: "", valor: (l) => l.cp },
+  { id: "ec", rotulo: "EC", larg: 5, tipo: "txt", cls: "", valor: (l) => l.ec },
+  { id: "dfe", rotulo: "DF-e", larg: 34, tipo: "txt", cls: "dfes", valor: (l) => l.dfe },
+  { id: "anexos", rotulo: "Anexos", larg: 8, tipo: "num", cls: "num", valor: (l) => l.anexos },
+];
 const LOTE_DELIM = [";", "\t", ",", "|"];
-const LOTE_MAX_NCM = 5000;   // trava: códigos por importação
+const LOTE_MAX_NCM = 5000;    // trava: códigos por importação
 const LOTE_MAX_LINHA = 20000; // trava: linhas geradas
-const LOTE_MAX_TELA = 500;   // linhas renderizadas de uma vez
+const LOTE_IDS = LOTE_COLS.map((c) => c.id);
 
 let LOTE = { ncms: 0, linhas: [], semVinculo: 0, naoEncontrado: 0, truncado: false };
+let lotePagina = 0;
+let loteTam = 50;
+let loteFiltro = "";
+let loteOrdem = { col: "", dir: "asc" };
+let loteColunas = LOTE_IDS.slice(); // ordem de exibição
+let loteOcultas = [];              // ids escondidos
+
+function aplicarPrefsLote() {
+  const p = lerPrefs().lote || {};
+  if (TAMS.includes(p.tam)) loteTam = p.tam;
+  if (Array.isArray(p.colunas)) {
+    const ids = p.colunas.filter((id) => LOTE_IDS.includes(id));
+    // Coluna nova entra na posição padrão dela (e não no fim), para quem já
+    // tinha uma ordem salva no navegador.
+    for (const id of LOTE_IDS) {
+      if (ids.includes(id)) continue;
+      let pos = ids.length;
+      for (let i = LOTE_IDS.indexOf(id) + 1; i < LOTE_IDS.length; i++) {
+        const j = ids.indexOf(LOTE_IDS[i]);
+        if (j >= 0) { pos = j; break; }
+      }
+      ids.splice(pos, 0, id);
+    }
+    loteColunas = ids;
+  }
+  if (Array.isArray(p.ocultas)) loteOcultas = p.ocultas.filter((id) => LOTE_IDS.includes(id));
+  if (p.ordem && LOTE_IDS.includes(p.ordem.col)) {
+    loteOrdem = { col: p.ordem.col, dir: p.ordem.dir === "desc" ? "desc" : "asc" };
+  }
+}
+
+function salvarPrefsLote() {
+  gravarPrefs({ lote: { tam: loteTam, colunas: loteColunas, ocultas: loteOcultas, ordem: loteOrdem } });
+}
+
+const colsVisiveis = () => loteColunas
+  .map((id) => LOTE_COLS.find((c) => c.id === id))
+  .filter((c) => c && !loteOcultas.includes(c.id));
 
 // Nomes de cabeçalho aceitos como coluna de NCM (já normalizados).
 const LOTE_CABECALHO = ["ncm consultado", "ncm", "codigo ncm", "cod ncm", "codncm"];
 
 const soDigitos = (s) => (s ?? "").toString().replace(/\D/g, "");
+
+// Cache da última extração: gravarHash() roda a cada tecla e não pode
+// reprocessar uma lista de 5.000 códigos a cada render.
+let loteNcmsCache = { texto: null, lista: [] };
+
+function extrairNcmsCache(texto) {
+  if (loteNcmsCache.texto === texto) return loteNcmsCache.lista;
+  loteNcmsCache = { texto, lista: extrairNcms(texto) };
+  return loteNcmsCache.lista;
+}
 
 function dividirLinha(linha, delim) {
   // Quebra respeitando aspas (CSV padrão: "" escapa aspas).
@@ -912,11 +1122,12 @@ function casarCodigo(cod) {
 function linhaLote(cod, ref, f) {
   return {
     ncm: cod,
+    descNcm: descNcm(cod) || "",
     cst: ref[0] || "",
     cod: ref[1] || "",
     desc: (f && (f.NomeReduzido || f.NomeClassTrib) || "").trim(),
     tipo: f && f.TipoAliq ? `${f.TipoAliq} — ${TIPO_ALIQ[f.TipoAliq] || ""}` : "",
-    red: f ? ([fmtPerc(f.PercRedIbs), fmtPerc(f.PercRedCbs)].join(" · ")) : "",
+    red: fmtReducao(f),
     tr: f ? (f.IndTribRegular ? "Sim" : "Não") : "",
     cp: f ? (f.IndPermiteCredPres ? "Sim" : "Não") : "",
     ec: f ? (f.IndEstornoCred ? "Sim" : "Não") : "",
@@ -927,6 +1138,16 @@ function linhaLote(cod, ref, f) {
   };
 }
 
+// NCM válido (com descrição no índice) que não aparece em nenhum anexo:
+// a classificação é a regra geral (CST 000 / cClassTrib 000001).
+function linhaRegraGeral(ncm) {
+  const f = (MAP_CCT.get(REGRA_GERAL_CCT) || {}).filho;
+  const l = linhaLote(ncm, [REGRA_GERAL_CST, REGRA_GERAL_CCT, ""], f);
+  l.nota = REGRA_GERAL_NOTA;
+  l.regra = true;
+  return l;
+}
+
 function montarLote(ncms) {
   const linhas = [];
   let semVinculo = 0, naoEncontrado = 0, truncado = false;
@@ -934,12 +1155,17 @@ function montarLote(ncms) {
     const cods = casarCodigo(ncm);
     if (!cods.length) {
       const desc = descNcm(ncm) || "";
-      if (desc) semVinculo++; else naoEncontrado++;
-      linhas.push({
-        ncm, cst: "", cod: "", desc, tipo: "", red: "", tr: "", cp: "", ec: "",
-        dfe: "", anexos: "", perm: "",
-        nota: desc ? "sem vínculo nos anexos" : "não encontrado no índice",
-      });
+      if (desc) {
+        semVinculo++;
+        linhas.push(linhaRegraGeral(ncm));
+      } else {
+        naoEncontrado++;
+        linhas.push({
+          ncm, descNcm: "", cst: "", cod: "", desc: "", tipo: "", red: "", tr: "",
+          cp: "", ec: "", dfe: "", anexos: "", perm: "",
+          nota: "não encontrado no índice",
+        });
+      }
       continue;
     }
     for (const cod of cods) {
@@ -956,15 +1182,131 @@ function montarLote(ncms) {
   LOTE = { ncms: ncms.length, linhas, semVinculo, naoEncontrado, truncado };
 }
 
+/* ---------- lista em lote: filtro, ordenação, colunas e paginação ---------- */
+
+function linhasLoteFiltradas() {
+  const t = norm(loteFiltro).trim();
+  if (!t) return LOTE.linhas;
+  const termos = t.split(/\s+/).filter((w) => w.length >= 2);
+  if (!termos.length) return LOTE.linhas;
+  return LOTE.linhas.filter((l) => {
+    const hay = norm([l.ncm, l.descNcm, l.cst, l.cod, l.desc, l.tipo, l.red, l.tr, l.cp,
+      l.ec, l.dfe, l.anexos, l.perm, l.nota].join(" "));
+    return termos.every((term) => hay.includes(term));
+  });
+}
+
+function linhasLoteVisiveis() {
+  const linhas = linhasLoteFiltradas();
+  const col = LOTE_COLS.find((c) => c.id === loteOrdem.col);
+  if (!col) return linhas;
+  const mul = loteOrdem.dir === "desc" ? -1 : 1;
+  return linhas.slice().sort((a, b) => {
+    const va = col.valor(a), vb = col.valor(b);
+    if (col.tipo === "num") {
+      const na = va === "" ? -1 : Number(va);
+      const nb = vb === "" ? -1 : Number(vb);
+      return (na - nb) * mul;
+    }
+    return String(va ?? "").localeCompare(String(vb ?? ""), "pt-BR") * mul;
+  });
+}
+
+const matrizLote = (linhas, cols) => linhas.map((l) => cols.map((c) => c.valor(l)));
+
+function celulaLote(c, l) {
+  const v = c.valor(l);
+  const nota = l.nota ? `<span class="via-ncm">${esc(l.nota)}</span>` : "";
+  if (c.id === "ncm") {
+    const marca = l.perm
+      ? `<span class="via-ncm${l.perm === "VEDADO" ? " ved" : ""}">${esc(l.perm)}</span>`
+      : l.regra ? `<span class="via-ncm">${REGRA_GERAL_TXT}</span>` : "";
+    return `<td class="cod">${esc(v)}${marca}</td>`;
+  }
+  // A nota ("sem vínculo...", "não encontrado...") é sobre o NCM: fica junto
+  // da Descrição NCM, não da descrição do cClassTrib.
+  if (c.id === "descNcm" || c.id === "desc") {
+    const selo = c.id === "descNcm" ? nota : "";
+    return `<td${c.cls ? ` class="${c.cls}"` : ""}>${v ? esc(v) : "—"}${selo}</td>`;
+  }
+  const cls = c.cls || "";
+  const vazio = v === "" || v === null || v === undefined;
+  return `<td${cls ? ` class="${cls}"` : ""}>${vazio ? "—" : esc(v)}</td>`;
+}
+
+function renderColunasLote() {
+  const ul = $("loteColunasLista");
+  if (!ul) return;
+  const cols = loteColunas.map((id) => LOTE_COLS.find((c) => c.id === id)).filter(Boolean);
+  ul.innerHTML = cols.map((c, i) => `<li draggable="true" data-coluna="${c.id}">
+    <span class="arrasta" aria-hidden="true" title="Arraste para reordenar">⠿</span>
+    <label><input type="checkbox" data-vis="${c.id}"${loteOcultas.includes(c.id) ? "" : " checked"}> ${esc(c.rotulo)}</label>
+    <span class="dir">
+      <button type="button" class="btn btn-mini" data-mv="${c.id}:subir"${i === 0 ? " disabled" : ""} aria-label="Mover ${esc(c.rotulo)} para cima">▲</button>
+      <button type="button" class="btn btn-mini" data-mv="${c.id}:descer"${i === cols.length - 1 ? " disabled" : ""} aria-label="Mover ${esc(c.rotulo)} para baixo">▼</button>
+    </span>
+  </li>`).join("");
+
+  const resumo = $("loteColunasResumo");
+  if (resumo) resumo.textContent = `Colunas (${colsVisiveis().length}/${LOTE_COLS.length})`;
+
+  ul.querySelectorAll("input[data-vis]").forEach((cb) => {
+    cb.onchange = () => {
+      const id = cb.dataset.vis;
+      loteOcultas = cb.checked
+        ? loteOcultas.filter((x) => x !== id)
+        : [...new Set([...loteOcultas, id])];
+      salvarPrefsLote();
+      renderLote();
+    };
+  });
+  ul.querySelectorAll("[data-mv]").forEach((b) => {
+    b.onclick = () => {
+      const [id, dir] = b.dataset.mv.split(":");
+      const i = loteColunas.indexOf(id);
+      const j = dir === "subir" ? i - 1 : i + 1;
+      if (i < 0 || j < 0 || j >= loteColunas.length) return;
+      [loteColunas[i], loteColunas[j]] = [loteColunas[j], loteColunas[i]];
+      salvarPrefsLote();
+      renderLote();
+    };
+  });
+  let arrastando = null;
+  ul.querySelectorAll("li").forEach((li) => {
+    li.addEventListener("dragstart", () => {
+      arrastando = li.dataset.coluna;
+      li.classList.add("arrastando");
+    });
+    li.addEventListener("dragend", () => li.classList.remove("arrastando"));
+    li.addEventListener("dragover", (e) => e.preventDefault());
+    li.addEventListener("drop", (e) => {
+      e.preventDefault();
+      const alvo = li.dataset.coluna;
+      if (!arrastando || arrastando === alvo) return;
+      const de = loteColunas.indexOf(arrastando);
+      const para = loteColunas.indexOf(alvo);
+      if (de < 0 || para < 0) return;
+      loteColunas.splice(de, 1);
+      loteColunas.splice(para, 0, arrastando);
+      arrastando = null;
+      salvarPrefsLote();
+      renderLote();
+    });
+  });
+}
+
 function renderLote() {
   const box = $("loteResultados");
   const info = $("loteResumo");
   const n = LOTE.linhas.length;
   $("btnLoteCsv").disabled = !n;
   $("btnLoteXlsx").disabled = !n;
+  // A barra (filtro, colunas, exportação) só faz sentido com resultado na tela.
+  if ($("loteBarra")) $("loteBarra").hidden = !n;
+  renderColunasLote();
 
   if (!LOTE.ncms) {
-    info.textContent = "Colunas: " + LOTE_HEAD.join(" · ") + ".";
+    info.textContent = "Colunas padrão: " + LOTE_COLS.map((c) => c.rotulo).join(" · ") + ".";
     box.innerHTML = "";
     return;
   }
@@ -972,7 +1314,7 @@ function renderLote() {
     `${LOTE.ncms} NCM(s) importado(s)`,
     `${n} linha(s)`,
   ];
-  if (LOTE.semVinculo) partes.push(`${LOTE.semVinculo} sem vínculo`);
+  if (LOTE.semVinculo) partes.push(`${LOTE.semVinculo} sem vínculo → regra geral`);
   if (LOTE.naoEncontrado) partes.push(`${LOTE.naoEncontrado} não encontrado(s)`);
   if (LOTE.truncado) partes.push(`limitado a ${LOTE_MAX_LINHA} linhas`);
   info.textContent = partes.join(" · ") + ".";
@@ -983,29 +1325,70 @@ function renderLote() {
       nenhum código completo (ex.: <code>0901</code>).</div>`;
     return;
   }
-  const mostra = LOTE.linhas.slice(0, LOTE_MAX_TELA);
-  const linhas = mostra.map((l) => `<tr>
-    <td class="cod">${esc(l.ncm)}${l.perm ? `<span class="via-ncm${l.perm === "VEDADO" ? " ved" : ""}">${esc(l.perm)}</span>` : ""}</td>
-    <td class="cod">${l.cst ? esc(l.cst) : "—"}</td>
-    <td class="cod">${l.cod ? esc(l.cod) : "—"}</td>
-    <td>${l.desc ? esc(l.desc) : "—"}${l.nota ? `<span class="via-ncm">${esc(l.nota)}</span>` : ""}</td>
-    <td class="num">${l.tipo ? esc(l.tipo) : "—"}</td>
-    <td class="num">${l.red ? esc(l.red) : "—"}</td>
-    <td>${l.tr ? esc(l.tr) : "—"}</td>
-    <td>${l.cp ? esc(l.cp) : "—"}</td>
-    <td>${l.ec ? esc(l.ec) : "—"}</td>
-    <td class="dfes">${esc(l.dfe || "—")}</td>
-    <td class="num">${l.anexos === "" ? "—" : esc(String(l.anexos))}</td>
-  </tr>`).join("");
-  box.innerHTML = `<div class="tab-wrap"><table>
-    <thead><tr>${LOTE_HEAD.map((h, i) => `<th${i === 0 ? ' title="Código encontrado no índice NCM/NBS"' : ""}>${esc(h)}</th>`).join("")}<th></th></tr></thead>
-    <tbody>${linhas}</tbody></table></div>
-    ${n > mostra.length ? `<p class="dica" style="margin:8px 0 0">Mostrando ${mostra.length} de ${n} linhas — a exportação inclui todas.</p>` : ""}`;
+
+  const cols = colsVisiveis();
+  if (!cols.length) {
+    box.innerHTML = `<div class="vazio">Todas as colunas estão ocultas — marque ao menos uma em
+      <strong>Colunas</strong>.</div>`;
+    return;
+  }
+  const todas = linhasLoteVisiveis();
+  if (!todas.length) {
+    box.innerHTML = `<div class="vazio">Nenhuma linha corresponde ao filtro
+      “${esc(loteFiltro.trim())}”. <button type="button" class="btn btn-mini" id="loteLimpaFiltro">Limpar filtro</button></div>`;
+    const b = $("loteLimpaFiltro");
+    if (b) b.onclick = () => {
+      loteFiltro = "";
+      if ($("loteFiltro")) $("loteFiltro").value = "";
+      renderLote();
+    };
+    return;
+  }
+  lotePagina = paginaValida(lotePagina, todas.length, loteTam);
+  const ini = lotePagina * loteTam;
+  const fatia = todas.slice(ini, ini + loteTam);
+
+  const cab = cols.map((c) => {
+    const ativo = loteOrdem.col === c.id;
+    const seta = ativo ? (loteOrdem.dir === "asc" ? " ▲" : " ▼") : "";
+    const aria = ativo ? (loteOrdem.dir === "asc" ? "ascending" : "descending") : "none";
+    return `<th class="ordenavel${ativo ? " ativo" : ""}" data-sort="${c.id}" aria-sort="${aria}"` +
+      ` title="Ordenar por ${esc(c.rotulo)}">${esc(c.rotulo)}${seta}</th>`;
+  }).join("");
+  const linhas = fatia.map((l) => `<tr>${cols.map((c) => celulaLote(c, l)).join("")}</tr>`).join("");
+  const rotulo = loteFiltro.trim()
+    ? `${todas.length} de ${n} linha(s) — filtro ativo`
+    : `${todas.length} linha(s)`;
+
+  box.innerHTML = `<div class="grupo"><div class="tab-wrap"><table>
+      <thead><tr>${cab}</tr></thead><tbody>${linhas}</tbody></table></div>
+    ${barraPaginacao("lote", todas.length, lotePagina, loteTam, rotulo)}</div>`;
+
+  ligarPaginacao(box, "lote", (acao, v) => {
+    if (acao === "ant") lotePagina = Math.max(0, lotePagina - 1);
+    else if (acao === "prox") lotePagina += 1;
+    else { loteTam = v; lotePagina = 0; salvarPrefsLote(); }
+    renderLote();
+  });
+  box.querySelectorAll("[data-sort]").forEach((th) => {
+    th.onclick = () => {
+      const id = th.dataset.sort;
+      if (loteOrdem.col === id) loteOrdem.dir = loteOrdem.dir === "asc" ? "desc" : "asc";
+      else loteOrdem = { col: id, dir: "asc" };
+      lotePagina = 0;
+      salvarPrefsLote();
+      renderLote();
+    };
+  });
 }
 
-function linhasParaExportar() {
-  return LOTE.linhas.map((l) =>
-    [l.ncm, l.cst, l.cod, l.desc, l.tipo, l.red, l.tr, l.cp, l.ec, l.dfe, l.anexos]);
+// Escopo da exportação: tudo (filtro+ordem aplicados) ou só a página na tela.
+function escopoExportLote() {
+  const todas = linhasLoteVisiveis();
+  const escopo = $("loteEscopo") ? $("loteEscopo").value : "tudo";
+  if (escopo !== "pagina") return todas;
+  const pg = paginaValida(lotePagina, todas.length, loteTam);
+  return todas.slice(pg * loteTam, pg * loteTam + loteTam);
 }
 
 async function processarLote() {
@@ -1020,7 +1403,8 @@ async function processarLote() {
     $("loteResumo").textContent = "Não foi possível carregar o índice NCM (data/ncm-nbs.json).";
     return;
   }
-  montarLote(extrairNcms(texto));
+  montarLote(extrairNcmsCache($("loteTexto").value));
+  lotePagina = 0;
   renderLote();
 }
 
@@ -1040,31 +1424,36 @@ function lerArquivoLote(ev) {
 
 function limparLote() {
   $("loteTexto").value = "";
+  loteFiltro = "";
+  if ($("loteFiltro")) $("loteFiltro").value = "";
+  lotePagina = 0;
   LOTE = { ncms: 0, linhas: [], semVinculo: 0, naoEncontrado: 0, truncado: false };
   renderLote();
   $("loteTexto").focus();
 }
 
 function exportarLoteCSV() {
-  if (!LOTE.linhas.length) return;
-  const linhas = [LOTE_HEAD.map(csvCell).join(";")];
-  for (const l of linhasParaExportar()) linhas.push(l.map(csvCell).join(";"));
-  baixar("ncm-cst-cclasstrib.csv", "﻿" + linhas.join("\r\n"), "text/csv;charset=utf-8");
+  const cols = colsVisiveis();
+  const linhas = escopoExportLote();
+  if (!linhas.length || !cols.length) return;
+  const out = [cols.map((c) => csvCell(c.rotulo)).join(";")];
+  for (const r of matrizLote(linhas, cols)) out.push(r.map(csvCell).join(";"));
+  baixar("ncm-cst-cclasstrib.csv", "﻿" + out.join("\r\n"), "text/csv;charset=utf-8");
 }
 
 async function exportarLoteXLSX() {
-  if (!LOTE.linhas.length) return;
-  // Anexos é a única coluna numérica; os códigos precisam ficar como texto
-  // (CST "000" e cClassTrib com zero à esquerda).
-  const dados = [LOTE_HEAD.slice()];
-  for (const l of linhasParaExportar()) {
-    const r = l.slice();
-    r[10] = r[10] === "" ? "" : Number(r[10]);
-    dados.push(r);
+  const cols = colsVisiveis();
+  const linhas = escopoExportLote();
+  if (!linhas.length || !cols.length) return;
+  // Só as colunas numéricas viram número; CST e cClassTrib precisam ficar
+  // como texto por causa dos zeros à esquerda.
+  const dados = [cols.map((c) => c.rotulo)];
+  for (const r of matrizLote(linhas, cols)) {
+    dados.push(r.map((v, i) => (cols[i].tipo === "num" && v !== "" ? Number(v) : v)));
   }
-  const nome = "ncm-cst-cclasstrib.xlsx";
   try {
-    baixarBlob(nome, await xlsxBlob("NCM x cClassTrib", dados, LOTE_LARG));
+    baixarBlob("ncm-cst-cclasstrib.xlsx",
+      await xlsxBlob("NCM x cClassTrib", dados, cols.map((c) => c.larg)));
   } catch (e) {
     $("loteResumo").textContent = `Falha ao gerar a planilha (${e.message}). Use a exportação CSV.`;
   }
@@ -1266,14 +1655,16 @@ function atualizar() {
 }
 
 function limpar() {
-  // Escopo: só a janela 1 (a busca NBS tem limpeza própria no × do campo).
+  // Escopo: só a janela 1 (a busca NBS tem limpeza própria no × do campo,
+  // e o painel do lote tem o próprio botão Limpar).
   $("q").value = "";
   $("fCst").value = "";
   $("fCod").value = "";
   $("fNomeCst").value = "";
   $("fNomeRed").value = "";
   $("fTipoAliq").value = "";
-  document.querySelectorAll('input[type="checkbox"]').forEach((c) => (c.checked = false));
+  $("painelFiltros").querySelectorAll('input[type="checkbox"]')
+    .forEach((c) => (c.checked = false));
   document.querySelector('input[name="view"][value="grupo"]').checked = true;
   document.querySelector('input[name="op"][value="E"]').checked = true;
   reconstruirCodigos();
@@ -1290,6 +1681,7 @@ function setBuscaValor(v) {
   const qel = $("q");
   qel.value = v;
 }
+
 function gravarHash() {
   try {
     const url = new URL(location.href);
@@ -1328,6 +1720,9 @@ $("dlg").addEventListener("close", () => {
     return;
   }
   popularSelects();
+  aplicarPrefsLote();
+  if (lerPrefs().loteEscopo === "pagina" && $("loteEscopo")) $("loteEscopo").value = "pagina";
+  if ($("loteLegenda")) $("loteLegenda").textContent = LEGENDA;
 
   $("q").addEventListener("input", () => {
     clearTimeout(tBusca);
@@ -1343,7 +1738,9 @@ $("dlg").addEventListener("close", () => {
   $("fNomeRed").addEventListener("input", agenda);
   $("fCst").addEventListener("change", () => { reconstruirCodigos(); atualizar(); });
   document.querySelectorAll("select, input").forEach((el) => {
-    if (!["q", "q8", "fNomeCst", "fNomeRed", "loteArquivo"].includes(el.id)) el.addEventListener("change", atualizar);
+    if (!["q", "q8", "fNomeCst", "fNomeRed", "loteArquivo", "loteFiltro", "loteEscopo"].includes(el.id)) {
+      el.addEventListener("change", atualizar);
+    }
   });
   $("btnLimpar").onclick = limpar;
   $("btnCsv").onclick = () => exportarCSV(applyFilters(DATA, collectFilters()));
@@ -1360,7 +1757,25 @@ $("dlg").addEventListener("close", () => {
     clearTimeout(tLote);
     tLote = setTimeout(processarLote, 400);
   });
+  $("loteFiltro").addEventListener("input", () => {
+    clearTimeout(tLoteFiltro);
+    tLoteFiltro = setTimeout(() => {
+      loteFiltro = $("loteFiltro").value;
+      lotePagina = 0;
+      renderLote();
+    }, 200);
+  });
+  $("loteEscopo").addEventListener("change", () => {
+    gravarPrefs({ loteEscopo: $("loteEscopo").value });
+  });
+  $("loteColunasPadrao").onclick = () => {
+    loteColunas = LOTE_IDS.slice();
+    loteOcultas = [];
+    salvarPrefsLote();
+    renderLote();
+  };
 
+  renderLote();
   atualizar();
 
   // Pre-carrega o indice NCM em segundo plano para que a busca
@@ -1369,6 +1784,7 @@ $("dlg").addEventListener("close", () => {
     if (ok) {
     const qv = $("q").value.trim();
     if (normCod(qv).length >= 7 || qv.length >= 2) atualizar();
+    if ($("loteTexto").value.trim()) processarLote(); // lista vinda da URL
   }
   });
 

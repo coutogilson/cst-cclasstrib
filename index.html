@@ -9,8 +9,8 @@
 <meta property="og:description" content="Consulta tributária IBS/CBS: CST, cClassTrib, NCM e NBS. Espelho do Portal da Conformidade Fácil.">
 <meta property="og:type" content="website">
 <link rel="canonical" href="https://silvioalbqrq.github.io/cst-cclasstrib/">
-<link rel="stylesheet" href="assets/styles.css">
-<link rel="stylesheet" href="assets/corporativo.css">
+<link rel="stylesheet" href="assets/styles.css?v=20261013c">
+<link rel="stylesheet" href="assets/corporativo.css?v=20261013c">
 </head>
 <body>
 
@@ -146,12 +146,37 @@
         <button type="button" id="btnLoteArquivo" class="btn">Abrir CSV/TXT…</button>
         <button type="button" id="btnLoteProcessar" class="btn">Processar</button>
         <button type="button" id="btnLoteLimpar" class="btn">Limpar</button>
-        <button type="button" id="btnLoteCsv" class="btn" disabled>Exportar CSV</button>
-        <button type="button" id="btnLoteXlsx" class="btn" disabled>Exportar Excel (.xlsx)</button>
       </div>
-      <p class="dica" id="loteResumo">Colunas: NCM consultado · CST · cClassTrib · Descrição · Tipo alíq. · Redução · TR · CP · EC · DF-e · Anexos.
-        NCM sem vínculo nos anexos entra com a descrição do produto e as demais colunas vazias.</p>
+      <p class="dica" id="loteResumo">Colunas: NCM consultado · Descrição NCM · CST · cClassTrib · Descrição CClassTrib · Tipo alíq. · Redução · TR · CP · EC · DF-e · Anexos.
+        NCM sem vínculo nos anexos recebe a <strong>regra geral</strong> (CST <code>000</code> ·
+        cClassTrib <code>000001</code> — LC 214/2025, art. 4º).</p>
+
+      <div class="lote-barra" id="loteBarra" hidden>
+        <label class="campo">Filtrar no resultado
+          <input type="search" id="loteFiltro" placeholder="CST, cClassTrib, palavra, VEDADO…" autocomplete="off">
+        </label>
+        <label class="campo">Exportar
+          <select id="loteEscopo">
+            <option value="tudo" selected>tudo (com o filtro aplicado)</option>
+            <option value="pagina">só a página atual</option>
+          </select>
+        </label>
+        <details class="lote-colunas" id="loteColunasBox">
+          <summary class="btn btn-mini" id="loteColunasResumo">Colunas (11/11)</summary>
+          <div class="lote-colunas-caixa">
+            <p class="dica">Arraste pelo ⠿ (ou use ▲▼) para reordenar; desmarque para esconder.
+              A escolha vale para a tela e para os arquivos exportados.</p>
+            <ul id="loteColunasLista"></ul>
+            <button type="button" class="btn btn-mini" id="loteColunasPadrao">Restaurar padrão</button>
+          </div>
+        </details>
+        <span class="dir">
+          <button type="button" id="btnLoteCsv" class="btn" disabled>Exportar CSV</button>
+          <button type="button" id="btnLoteXlsx" class="btn" disabled>Exportar Excel (.xlsx)</button>
+        </span>
+      </div>
       <div id="loteResultados"></div>
+      <p class="legenda" id="loteLegenda"></p>
     </div>
   </details>
 
@@ -187,6 +212,6 @@
   </div>
 </footer>
 
-<script src="assets/app.js?v=20261011a" defer></script>
+<script src="assets/app.js?v=20261013c" defer></script>
 </body>
 </html>
