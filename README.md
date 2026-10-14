@@ -109,7 +109,9 @@ Cada script pode ser rodado sozinho (todos aceitam `--check`, e os de fonte acei
 - Se a fonte (portal + patches) ficar **mais pobre** que o arquivo atual, o script **não grava nada** e lista o que seria perdido, cClassTrib por cClassTrib. Use `--force` só quando a perda for intencional.
 - Se `--sem-patches` for usado, a curadoria não é aplicada (e o `test_dados.py` acusa).
 - Entradas que a fonte já traga são ignoradas, e o script avisa quando um patch virou obsoleto.
+- O `rotulo` de cada patch vira o campo `Curadoria` dos anexos gerados: a tela mostra esse rótulo como selo (busca por NCM, detalhe do cClassTrib e lista em lote), com a explicação no tooltip, para o vínculo não passar por dado oficial. Como a marca nasce do patch, ela **desaparece sozinha** quando a fonte passar a trazer o item. Hoje: `Anexo XIV revogado` no `200032` (o cClassTrib segue valendo pelo art. 133, agora por descrição) e `ausente no IT v1.70` no `200011`/`200033`.
 - **Mexeu no snapshot à mão? Registre o anexo em `scripts/patches.json`** (com `motivo` e `referencia`), senão a próxima atualização descarta a mudança. O `test_dados.py` falha se algum anexo curado sumir do snapshot.
+- **Medicamentos (NCM do capítulo 30)** saem com uma **ressalva do art. 146**: a alíquota pode ser reduzida a zero conforme a *destinação* (doenças raras, negligenciadas, oncologia, diabetes, HIV/aids e outras IST, cardiovasculares, Farmácia Popular), o *adquirente* (órgão público ou entidade imune com Cebas) ou a *natureza* (soros e vacinas). O site **não sugere cClassTrib** nesse caso — o critério é a lista do art. 146, § 3º, não o NCM. Essa lista é divulgada a cada 120 dias pelo Ministério da Fazenda e pelo CGIBS e ainda não foi publicada: quando sair, trazê-la para a base e o enquadramento em alíquota zero passa a ser verificável por produto.
 
 Anexo VIII — correlação NBS × IndOp × cClassTrib (planilha do Anexo VIII, V1.01.00):
 

@@ -50,7 +50,7 @@ if (typeof CompressionStream !== "undefined") ctx.CompressionStream = Compressio
 const ganchos = `
 ;globalThis.__api = {
   // núcleo
-  extrairNcms, extrairNcmsCache, montarLote, dividirLinha, casarCodigo,
+  extrairNcms, extrairNcmsCache, montarLote, dividirLinha, casarCodigo, detalheNcm,
   LOTE_COLS, LOTE_IDS, colsVisiveis, linhasLoteVisiveis, linhasLoteFiltradas,
   totalPaginas, paginaValida, barraPaginacao, temFiltro,
   // render + exportação
@@ -138,6 +138,29 @@ ok("resolução: regra geral é o único CST 000 sem anexo aplicado por ausênci
 
 api.montarLote(api.extrairNcms("0901"));
 ok("resolução: prefixo expande para vários NCM", new Set(api.getLote().linhas.map((l) => l.ncm)).size > 1);
+
+/* ---------- 2b. curadoria: vínculo que não está na lista oficial ---------- */
+// 30049069 é medicamento: linka 200032 (curadoria do Anexo XIV revogado) e
+// 200038 (oficial). Só o primeiro pode sair marcado.
+api.montarLote(api.extrairNcms("30049069"));
+const curadas = api.getLote().linhas.filter((l) => l.curadoria);
+ok("curadoria: vínculo do patches.json sai marcado no lote",
+  curadas.length > 0 && curadas.some((l) => l.cod === "200032" && /Anexo XIV revogado/.test(l.curadoria)),
+  curadas.length ? `${curadas.length} linha(s) · ${curadas[0].curadoria}` : "nenhuma marca");
+api.montarLote(api.extrairNcms("07082000"));
+ok("curadoria: vínculo oficial não leva a marca",
+  api.getLote().linhas.length > 0 && api.getLote().linhas.every((l) => !l.curadoria));
+
+// A consulta por CÓDIGO na janela 1 tem caminho próprio (detalheNcm), separado
+// do lote: a marca precisa sobreviver aos dois.
+const mapaCod = api.detalheNcm("30049069");
+ok("curadoria: consulta por código na janela 1 mantém a marca",
+  !!mapaCod["200032"] && /Anexo XIV revogado/.test(mapaCod["200032"][0].curadoria),
+  JSON.stringify(mapaCod["200032"] || null));
+const mapaOficial = api.detalheNcm("07082000");
+ok("curadoria: consulta por código de vínculo oficial não marca",
+  Object.values(mapaOficial).length > 0 &&
+  Object.values(mapaOficial).every((arr) => arr.every((x) => !x.curadoria)));
 
 /* ---------- 3. filtro, ordenação, colunas e paginação da lista ---------- */
 const reais = Object.keys(api.getIdx().codes).filter((c) => c.length === 8).slice(0, 900);
@@ -344,6 +367,28 @@ api.render(tudo, filtro({ q: "200003" }));
 html = api.el("resultados").innerHTML;
 ok("janela 1 com filtro: grupo já vem aberto", html.includes('<details class="grupo" open>'), "");
 ok("janela 1 com filtro: só o cClassTrib casado", (html.match(/data-detalhe="(\d+)"/g) || []).every((m) => m.includes("200003")));
+
+/* curadoria: vínculo que veio de scripts/patches.json avisa na própria badge
+   da tela principal (não só no Detalhe > Anexo) */
+const fCura = filtro({ q: "30049069" });
+api.render(api.applyFilters(api.getDados(), fCura), fCura);
+html = api.el("resultados").innerHTML;
+ok("tela: badge da janela 1 traz o aviso de curadoria",
+  html.includes("via-ncm cura") && html.includes("Anexo XIV revogado"),
+  (html.match(/class="via-ncm[^"]*"[^>]*>[^<]*/g) || []).slice(0, 4).join(" | "));
+
+/* ressalva do art. 146: só para NCM de medicamento (capítulo 30), e sem
+   sugerir cClassTrib — a lista do § 3º ainda não foi publicada */
+ok("tela: NCM de medicamento traz a ressalva do art. 146",
+  html.includes("aviso-art146") && html.includes("art. 146, § 3º"));
+const bloco146 = (html.match(/<p class="aviso-art146">[\s\S]*?<\/p>/) || [""])[0];
+ok("tela: ressalva do art. 146 não sugere cClassTrib",
+  bloco146.length > 0 && !/\b\d{6}\b/.test(bloco146),
+  bloco146 ? bloco146.slice(0, 70) : "bloco não encontrado");
+const fHort = filtro({ q: "07082000" });
+api.render(api.applyFilters(api.getDados(), fHort), fHort);
+ok("tela: NCM fora do capítulo 30 não traz a ressalva do art. 146",
+  !api.el("resultados").innerHTML.includes("aviso-art146"));
 
 /* regra geral: NCM localizado sem vínculo em anexo vira CST 000 / 000001 */
 const semVinculoF = filtro({ q: "01012100" });

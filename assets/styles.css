@@ -9,6 +9,9 @@
   --navy: #0b1526;
   --navy-soft: #9fb0c9;
   --ok: #1c7c3c;
+  --danger: #b3261e;
+  --danger-soft: #fdecea;
+  --danger-line: #f3c1bd;
   --radius: 14px;
   --shadow: 0 1px 3px rgba(16, 32, 54, 0.08);
 }
@@ -241,6 +244,18 @@ fieldset select, fieldset input[type="text"] {
   border-color: #f3c1bd;
   color: #b3261e;
 }
+/* Curadoria (scripts/patches.json): o vínculo não está mais na lista oficial do
+   portal. Vermelho de alerta, com borda tracejada para não se confundir com o
+   VEDADO (vermelho cheio). O texto do selo vem do próprio patch. */
+.via-ncm.cura {
+  background: var(--danger-soft);
+  border: 1px dashed var(--danger-line);
+  color: var(--danger);
+}
+.badge.cura {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
 .ncm-desc {
   background: var(--card);
   border: 1px solid var(--line);
@@ -270,6 +285,19 @@ fieldset select, fieldset input[type="text"] {
   font-family: ui-monospace, Consolas, monospace;
   font-weight: 700;
   color: #8a6d1a;
+}
+
+/* Ressalva do art. 146 para NCM de medicamento: informativa, sem sugerir
+   classificação (a alíquota zero depende da lista do art. 146, § 3º). */
+.aviso-art146 {
+  background: var(--accent-soft);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 10px 16px;
+  margin: 0 0 12px;
+  font-size: 0.85rem;
+  color: var(--ink);
 }
 
 .tab-wrap { overflow-x: auto; }

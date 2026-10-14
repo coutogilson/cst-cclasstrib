@@ -153,21 +153,28 @@ def main():
     if not os.path.isfile(patches_path):
         print("--   patches curados: scripts/patches.json não existe (nada a conferir)")
     else:
-        total_patch, faltando_patch, erro_patch = 0, [], None
+        total_patch, faltando_patch, erro_patch, marcados = 0, [], None, 0
         try:
             patches = carregar_patches(patches_path)
             total_patch = sum(len(p.get("itens") or []) for p in patches)
             faltando_patch = conferir_patches(full, patches)
+            marcados = sum(
+                1 for p in full for f in p.get("ClassificacoesTributarias", [])
+                for a in (f.get("Anexos") or []) if a.get("Curadoria")
+            )
         except Exception as e:  # JSON quebrado, patch malformado
             erro_patch = e
-        ok = erro_patch is None and not faltando_patch
+        ok = erro_patch is None and not faltando_patch and marcados == total_patch
         print(f"{'OK  ' if ok else 'FAIL'} patches curados (scripts/patches.json): "
-              f"{total_patch} anexo(s), {len(faltando_patch)} faltando"
+              f"{total_patch} anexo(s), {len(faltando_patch)} faltando, {marcados} marcado(s)"
               + (f" — {erro_patch}" if erro_patch else ""))
         if not ok:
             for cod, motivo in faltando_patch:
                 print(f"  {cod}: {motivo}")
-            print("  rode scripts/atualizar.py (sem --sem-patches) para reaplicar a curadoria")
+            if erro_patch is None and marcados != total_patch:
+                print("  a marca 'Curadoria' não confere: rode scripts/atualizar.py para regerar")
+            else:
+                print("  rode scripts/atualizar.py (sem --sem-patches) para reaplicar a curadoria")
             falhas.append("patches-curados")
 
     # Fragmentos data/anexos/*.json (Detalhe baixa o fragmento, não o full)

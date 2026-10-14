@@ -132,6 +132,9 @@ def build_index(data):
     """Reverse index: NCM/NBS code -> list of referencing cClassTribs.
 
     {"codes": {"10062010": {"t": "NCM", "ref": [[cst, cod, permissao, ini, fim], ...]}}}
+
+    Anotação curada entra como 6º elemento do ref (o rótulo do patch), e só
+    existe nos vínculos que vieram de scripts/patches.json.
     """
     codes = {}
     for pai in data:
@@ -147,6 +150,8 @@ def build_index(data):
                     (a.get("DthIniVig") or "")[:10],
                     (a.get("DthFimVig") or "")[:10],
                 ]
+                if a.get("Curadoria"):
+                    ref.append(a["Curadoria"])
                 if ref not in entry["ref"]:
                     entry["ref"].append(ref)
     for entry in codes.values():
@@ -158,6 +163,15 @@ def build_index(data):
 
 def _chave(anexo):
     return json.dumps(anexo, ensure_ascii=False, sort_keys=True)
+
+
+def _chave_conteudo(anexo):
+    """Chave do anexo sem os campos de apresentação (a marca de curadoria).
+
+    A guarda de perda compara conteúdo: marcar um vínculo como curadoria não é
+    perder dado, então "Curadoria" fica fora da comparação.
+    """
+    return _chave({k: v for k, v in anexo.items() if k != "Curadoria"})
 
 
 def _por_codigo(data):
@@ -185,11 +199,20 @@ def carregar_patches(caminho):
 
 
 def _entradas_do_patch(patch):
-    """Expande um patch: cada item é o anexo inteiro ou só o que varia do modelo."""
+    """Expande um patch: cada item é o anexo inteiro ou só o que varia do modelo.
+
+    A entrada gerada leva "Curadoria": <rotulo do patch>, para a tela avisar que
+    aquele vínculo não está na lista oficial. Como a marca nasce do patch, ela
+    desaparece sozinha quando a fonte passar a trazer o item: o patch fica
+    obsoleto e a entrada oficial (sem marca) é a que permanece.
+    """
     modelo = patch.get("modelo") or {}
+    rotulo = patch.get("rotulo") or ""
     for variacao in patch.get("itens") or []:
         entrada = dict(modelo)
         entrada.update(variacao)
+        if rotulo:
+            entrada["Curadoria"] = rotulo
         yield entrada
 
 
@@ -261,9 +284,9 @@ def conferir_perda(antigo, novo):
     """Anexos que existem no arquivo atual e não no dataset novo (com repetição)."""
     if antigo is None:
         return {}
-    atual = {c: collections.Counter(_chave(a) for a in (f.get("Anexos") or []))
+    atual = {c: collections.Counter(_chave_conteudo(a) for a in (f.get("Anexos") or []))
              for c, f in _por_codigo(antigo).items()}
-    futuro = {c: collections.Counter(_chave(a) for a in (f.get("Anexos") or []))
+    futuro = {c: collections.Counter(_chave_conteudo(a) for a in (f.get("Anexos") or []))
               for c, f in _por_codigo(novo).items()}
     faltando = {}
     for cod, cont in atual.items():

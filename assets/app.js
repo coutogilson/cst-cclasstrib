@@ -43,7 +43,7 @@ const PAI_BADGES = {
 const FILHO_FLAGS = ["IndTribRegular", "IndPermiteCredPres", "IndEstornoCred"];
 
 // Versão dos assets para cache-busting (?v=). Bump a cada release de dados.
-const ASSET_V = "20261013c";
+const ASSET_V = "20261013h";
 const urlV = (p) => `${p}?v=${ASSET_V}`;
 
 let DATA = [];
@@ -158,7 +158,7 @@ function detalheNcm(q) {
   const map = {};
   for (const g of buscarNcm(IDX, q, 1000)) {
     for (const it of g.itens) {
-      (map[it.cod] = map[it.cod] || []).push({ codigo: g.codigo, perm: it.perm });
+      (map[it.cod] = map[it.cod] || []).push({ codigo: g.codigo, perm: it.perm, curadoria: it.curadoria || "" });
     }
   }
   return map;
@@ -206,7 +206,7 @@ function descsParaTexto(q) {
     if (e && e.ref && e.ref.length) {
       for (const r of e.ref) {
         const arr = (map[r[1]] = map[r[1]] || []);
-        if (!arr.some((x) => x.codigo === c)) arr.push({ codigo: c, perm: r[2] || "—" });
+        if (!arr.some((x) => x.codigo === c)) arr.push({ codigo: c, perm: r[2] || "—", curadoria: r[5] || "" });
       }
     } else {
       const d = descNcm(c);
@@ -308,7 +308,7 @@ function grupoNcm(cod, e) {
     tipo: e.t || "—",
     itens: (e.ref || []).map((r) => ({
       cst: r[0], cod: r[1], perm: r[2] || "—",
-      ini: r[3] || "", fim: r[4] || "",
+      ini: r[3] || "", fim: r[4] || "", curadoria: r[5] || "",
     })),
   };
 }
@@ -559,9 +559,13 @@ function badgeNcm(info, cod, descs) {
   const html = itens.slice(0, BADGE_MAX).map((e) => {
     const d = (descs || {})[e.codigo];
     const rot = e.regra ? REGRA_GERAL_TXT : e.perm;
-    return `<span class="via-ncm${e.perm === "VEDADO" ? " ved" : ""}"` +
-      (d ? ` title="${esc(d)}"` : "") +
-      `>${esc(e.codigo)} · ${esc(rot)}</span>`;
+    // Vínculo que veio de scripts/patches.json: não está na lista oficial, e a
+    // tela diz isso (selo + motivo no title).
+    const marca = e.curadoria ? ` · ${esc(e.curadoria)}` : "";
+    const titulo = [d, e.curadoria ? `Curadoria: ${e.curadoria}` : ""].filter(Boolean).join(" — ");
+    return `<span class="via-ncm${e.perm === "VEDADO" ? " ved" : ""}${e.curadoria ? " cura" : ""}"` +
+      (titulo ? ` title="${esc(titulo)}"` : "") +
+      `>${esc(e.codigo)} · ${esc(rot)}${marca}</span>`;
   }).join("");
   return html + (itens.length > BADGE_MAX
     ? `<span class="via-ncm">+${itens.length - BADGE_MAX}</span>` : "");
@@ -620,6 +624,24 @@ const avisoRegraGeral = () =>
    <strong>regra geral</strong> — CST <code>${REGRA_GERAL_CST}</code> ·
    cClassTrib <code>${REGRA_GERAL_CCT}</code> (LC 214/2025, art. 4º).</p>`;
 
+// Ressalva para NCM de medicamento (capítulo 30): o art. 146 reduz a zero as
+// alíquotas conforme a DESTINAÇÃO do medicamento, e a lista é divulgada a cada
+// 120 dias por ato do Ministério da Fazenda e do CGIBS (art. 146, § 3º), ainda
+// não publicada. O critério é a lista, não o NCM — por isso aqui NÃO se sugere
+// cClassTrib: é só a ressalva.
+// FUTURO: quando a lista do art. 146, § 3º for publicada, trazê-la para a base
+// e então o enquadramento em alíquota zero passa a ser verificável por produto.
+const avisoArt146 = () =>
+  `<p class="aviso-art146">Medicamentos: a alíquota poderá ser
+   <strong>reduzida a zero</strong> pelo <strong>art. 146</strong> — conforme a
+   <em>destinação</em> (doenças raras, negligenciadas, oncologia, diabetes, HIV/aids e
+   outras IST, doenças cardiovasculares ou Programa Farmácia Popular), o
+   <em>adquirente</em> (órgão público ou entidade imune com Cebas) ou a
+   <em>natureza</em> (soros e vacinas). Essa lista será divulgada a cada 120 dias pelo
+   Ministério da Fazenda e pelo CGIBS (art. 146, § 3º)</p>`;
+
+const ehMedicamento = (q) => /^30/.test(normCod(q));
+
 function temFiltro(F) {
   return !!(F.q || F.cst || F.nomeCst || F.paiInd.length || F.cod ||
     F.nomeRed || F.tipoAliq || F.filhoFlags.length || F.dfes.length);
@@ -664,7 +686,8 @@ function render(filtered, F) {
   const descs = filtered.ncmDesc || {};
   const descKeys = Object.keys(descs);
   const cabeca = (descKeys.length ? descBox(descs) : "") +
-    (filtered.regraGeral ? avisoRegraGeral() : "");
+    (filtered.regraGeral ? avisoRegraGeral() : "") +
+    (ehMedicamento(F.q) ? avisoArt146() : "");
 
   if (F.view === "lista") {
     // Visão aberta por cClassTrib: uma tabela só, paginada.
@@ -822,7 +845,7 @@ async function carregarAnexos(cod) {
       <tbody>${anexos.map((a) => `<tr>
         <td>${esc(a.TipoCodigo ?? "")}</td>
         <td class="cod">${esc(a.CodNcmNbs ?? "")}</td>
-        <td title="${esc(a.Observacao || "")}">${esc(a.DescItemAnexo || a.DescAnexo || "")}</td>
+        <td title="${esc(a.Observacao || "")}${a.Curadoria ? esc(` — Curadoria: ${a.Curadoria}`) : ""}">${esc(a.DescItemAnexo || a.DescAnexo || "")}${a.Curadoria ? ` <span class="badge cura" title="${esc(a.Curadoria)}">${esc(a.Curadoria)}</span>` : ""}</td>
         <td class="num">${fmtDate(a.DthIniVig)}</td>
         <td class="num">${fmtDate(a.DthFimVig)}</td>
         <td class="${a.TipoPermissao === "VEDADO" ? "vedado" : "permitido"}">${esc(a.TipoPermissao ?? "")}</td>
@@ -1134,6 +1157,7 @@ function linhaLote(cod, ref, f) {
     dfe: f ? (dfesOf(f).join(", ") || "—") : "",
     anexos: f && f.qtdAnexos ? f.qtdAnexos : "",
     perm: ref[2] || "",
+    curadoria: ref[5] || "",
     nota: "",
   };
 }
@@ -1217,6 +1241,9 @@ const matrizLote = (linhas, cols) => linhas.map((l) => cols.map((c) => c.valor(l
 function celulaLote(c, l) {
   const v = c.valor(l);
   const nota = l.nota ? `<span class="via-ncm">${esc(l.nota)}</span>` : "";
+  // Curadoria (scripts/patches.json): vínculo fora da lista oficial do portal.
+  const curadoria = l.curadoria
+    ? ` <span class="via-ncm cura" title="${esc(l.curadoria)}">${esc(l.curadoria)}</span>` : "";
   if (c.id === "ncm") {
     const marca = l.perm
       ? `<span class="via-ncm${l.perm === "VEDADO" ? " ved" : ""}">${esc(l.perm)}</span>`
@@ -1226,7 +1253,7 @@ function celulaLote(c, l) {
   // A nota ("sem vínculo...", "não encontrado...") é sobre o NCM: fica junto
   // da Descrição NCM, não da descrição do cClassTrib.
   if (c.id === "descNcm" || c.id === "desc") {
-    const selo = c.id === "descNcm" ? nota : "";
+    const selo = c.id === "descNcm" ? nota + curadoria : "";
     return `<td${c.cls ? ` class="${c.cls}"` : ""}>${v ? esc(v) : "—"}${selo}</td>`;
   }
   const cls = c.cls || "";

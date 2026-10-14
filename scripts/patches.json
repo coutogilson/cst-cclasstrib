@@ -8,6 +8,10 @@
   "se repetem e 'itens' para o que varia (item inteiro quando o patch tem uma",
   "entrada so). Entradas que a fonte ja traga sao ignoradas, e o script avisa",
   "quando um patch ficou obsoleto.",
+  "'rotulo' e o aviso curto que a tela mostra no selo e no tooltip, para deixar claro que",
+  "aquele vinculo nao esta na lista oficial. A explicacao longa fica no motivo (aqui) e no",
+  "campo Observacao do proprio anexo. Como a marca nasce do patch, ela desaparece",
+  "sozinha quando a fonte passar a trazer o item.",
   "Mexeu na mao em data/classificacao-tributaria.json? Registre aqui tambem,",
   "senao a proxima atualizacao descarta a mudanca."
  ],
@@ -34,11 +38,12 @@
      "DescItemAnexo": "Frutose",
      "DescAnexo": "COMPOSIÇÕES PARA NUTRIÇÃO ENTERAL OU PARENTERAL E COMPOSIÇÕES ESPECIAIS E FÓRMULAS NUTRICIONAIS DESTINADAS ÀS PESSOAS COM ERROS INATOS DO METABOLISMO SUBMETIDAS À REDUÇÃO DE 60% (SESSENTA POR CENTO) DAS ALÍQUOTAS DO IBS E DA CBS"
     }
-   ]
+   ],
+   "rotulo": "ausente no IT v1.70"
   },
   {
    "cClassTrib": "200032",
-   "motivo": "Anexo XIV da LC 214/2025 (medicamentos, art. 133): a fonte oficial não traz mais estes NCM na lista de anexos do cClassTrib; o site mantém os 382 itens cadastrados.",
+   "motivo": "Anexo XIV (lista fechada de NCM de medicamentos) revogado pela LC 227/2026. O cClassTrib 200032 continua valendo pelo art. 133 (reducao de 60%), agora por DESCRICAO - medicamento registrado na Anvisa ou produzido por farmacia de manipulacao - e nao por lista de NCM. Mantido como referencia, com aviso na tela.",
    "referencia": "commit a376900",
    "modelo": {
     "CodIntProdServ": null,
@@ -2349,7 +2354,8 @@
      "NroItemAnexoLei": 383,
      "DescItemAnexo": "VACINA VARICELA (ATENUADA)"
     }
-   ]
+   ],
+   "rotulo": "Anexo XIV revogado"
   },
   {
    "cClassTrib": "200033",
@@ -2372,7 +2378,8 @@
      "DescItemAnexo": "Frutose",
      "DescAnexo": "COMPOSIÇÕES PARA NUTRIÇÃO ENTERAL OU PARENTERAL E COMPOSIÇÕES ESPECIAIS E FÓRMULAS NUTRICIONAIS DESTINADAS ÀS PESSOAS COM ERROS INATOS DO METABOLISMO SUBMETIDAS À REDUÇÃO DE 60% (SESSENTA POR CENTO) DAS ALÍQUOTAS DO IBS E DA CBS"
     }
-   ]
+   ],
+   "rotulo": "ausente no IT v1.70"
   }
  ]
 }
